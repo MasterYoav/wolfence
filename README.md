@@ -4,6 +4,10 @@
 Wolfence is a **security-first Git interface** that prevents unsafe code
 from ever leaving a developer's machine.
 
+[![Rust](https://img.shields.io/badge/Rust-%23000000.svg?e&logo=rust&logoColor=white)](#)
+[![Swift](https://img.shields.io/badge/Swift-F54A2A?logo=swift&logoColor=white)](#)
+
+
 ------------------------------------------------------------------------
 
 Modern developers move fast --- sometimes too fast.
