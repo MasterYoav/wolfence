@@ -1,0 +1,16 @@
+target/
+.DS_Store
+.wolfence/*
+!.wolfence/config.toml
+!.wolfence/policy/
+!.wolfence/policy/*.toml
+!.wolfence/receipts/
+!.wolfence/receipts/*.toml
+!.wolfence/receipts/archive/
+!.wolfence/receipts/archive/*.toml
+!.wolfence/trust/
+!.wolfence/trust/*.pem
+!.wolfence/trust/*.toml
+!.wolfence/trust/archive/
+!.wolfence/trust/archive/*.pem
+!.wolfence/trust/archive/*.toml

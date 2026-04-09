@@ -1,0 +1,13 @@
+# Wolfence repository configuration
+#
+# This file defines the local default security posture for this repository.
+# The current scaffold intentionally keeps the surface small while the core
+# decision engine hardens.
+
+[policy]
+
+# Available values:
+# - "advisory": never block, but warn on meaningful findings
+# - "standard": block high/critical findings
+# - "strict": block medium/high/critical findings
+mode = "standard"
