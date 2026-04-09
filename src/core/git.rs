@@ -81,6 +81,37 @@ pub fn config_value(repo_root: &Path, key: &str) -> AppResult<Option<String>> {
     }
 }
 
+/// Reads one repository-relative file as it exists at a specific Git reference.
+pub fn file_contents_at_ref(
+    repo_root: &Path,
+    reference: &str,
+    relative_path: &Path,
+) -> AppResult<Option<String>> {
+    let object = format!("{reference}:{}", relative_path.display());
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(["show", &object])
+        .output()?;
+
+    if output.status.success() {
+        return Ok(Some(String::from_utf8_lossy(&output.stdout).into_owned()));
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("exists on disk, but not in")
+        || stderr.contains("does not exist in")
+        || stderr.contains("pathspec")
+        || stderr.contains("invalid object name")
+        || stderr.contains("bad revision")
+        || stderr.contains("unknown revision")
+    {
+        return Ok(None);
+    }
+
+    Err(AppError::Git(stderr.trim().to_string()))
+}
+
 /// Returns the preferred remote for an initial push. Prefers `origin`, then falls
 /// back to the first configured remote.
 pub fn preferred_remote(repo_root: &Path) -> AppResult<Option<String>> {

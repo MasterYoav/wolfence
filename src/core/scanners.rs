@@ -21,6 +21,7 @@ use crate::app::AppResult;
 
 use super::context::{ExecutionContext, ProtectedAction};
 use super::findings::{Confidence, Finding, FindingCategory, Severity};
+use super::git::{self, PushStatus};
 use super::osv::{self, ResolvedDependency};
 
 const MAX_TEXT_SCAN_BYTES: u64 = 512 * 1024;
@@ -67,9 +68,13 @@ impl Scanner for SecretScanner {
             let Some(contents) = read_text_file(&full_path)? else {
                 continue;
             };
+            let rust_test_line_mask = rust_test_line_mask(file, &contents);
 
             for (line_number, line) in contents.lines().enumerate() {
                 let line_number = line_number + 1;
+                if should_skip_line(&rust_test_line_mask, line_number) {
+                    continue;
+                }
 
                 if let Some(finding) =
                     scan_private_key_headers(self.name(), file, line_number, line)
@@ -140,9 +145,13 @@ impl Scanner for BasicSastScanner {
             let Some(contents) = read_text_file(&full_path)? else {
                 continue;
             };
+            let rust_test_line_mask = rust_test_line_mask(file, &contents);
 
             for (line_number, line) in contents.lines().enumerate() {
                 let line_number = line_number + 1;
+                if should_skip_line(&rust_test_line_mask, line_number) {
+                    continue;
+                }
                 if let Some(finding) =
                     scan_remote_script_execution(self.name(), file, line_number, line)
                 {
@@ -170,19 +179,34 @@ impl Scanner for BasicSastScanner {
                     Confidence::Low,
                 ),
             ] {
-                if contents.contains(needle) {
-                    findings.push(Finding::new(
-                        format!("sast.pattern.{needle}"),
-                        self.name(),
-                        Severity::Medium,
-                        confidence,
-                        FindingCategory::Vulnerability,
-                        Some(file.clone()),
-                        title,
-                        detail,
-                        "Confirm the input path is trusted or replace the construct with a safer pattern.",
-                        format!("sast:{}:{needle}", file.display()),
-                    ));
+                if !generic_sast_pattern_applies_to_file(file, needle) {
+                    continue;
+                }
+
+                if let Some(line_number) = contents.lines().enumerate().find_map(|(index, line)| {
+                    let line_number = index + 1;
+                    if should_skip_line(&rust_test_line_mask, line_number) || !line.contains(needle)
+                    {
+                        return None;
+                    }
+
+                    Some(line_number)
+                }) {
+                    findings.push(
+                        Finding::new(
+                            format!("sast.pattern.{needle}"),
+                            self.name(),
+                            Severity::Medium,
+                            confidence,
+                            FindingCategory::Vulnerability,
+                            Some(file.clone()),
+                            title,
+                            detail,
+                            "Confirm the input path is trusted or replace the construct with a safer pattern.",
+                            format!("sast:{}:{needle}", file.display()),
+                        )
+                        .with_line(line_number),
+                    );
                 }
             }
         }
@@ -197,7 +221,7 @@ impl Scanner for DependencyScanner {
     }
 
     fn scan(&self, context: &ExecutionContext) -> AppResult<Vec<Finding>> {
-        let mut findings = dependency_relationship_findings(self.name(), &context.candidate_files);
+        let mut findings = dependency_relationship_findings(self.name(), context)?;
         let mut seen = findings
             .iter()
             .map(|finding| finding.fingerprint.clone())
@@ -1018,7 +1042,12 @@ fn scan_inline_authorization_credential(
     line: &str,
 ) -> Option<Finding> {
     let lowered = line.to_ascii_lowercase();
-    if !lowered.contains("authorization") {
+    let Some(authorization_index) = lowered.find("authorization") else {
+        return None;
+    };
+    let after_authorization = &lowered[authorization_index + "authorization".len()..];
+    let normalized_suffix = after_authorization.trim_start();
+    if !normalized_suffix.starts_with(':') && !normalized_suffix.starts_with('=') {
         return None;
     }
 
@@ -1341,9 +1370,10 @@ fn scan_service_webhook_url(
 
 fn dependency_relationship_findings(
     scanner: &'static str,
-    candidate_files: &[PathBuf],
-) -> Vec<Finding> {
+    context: &ExecutionContext,
+) -> AppResult<Vec<Finding>> {
     let mut findings = Vec::new();
+    let candidate_files = &context.candidate_files;
     let rust_manifest = changed_file(candidate_files, "Cargo.toml");
     let rust_lockfile = changed_file(candidate_files, "Cargo.lock");
     let node_manifest = changed_file(candidate_files, "package.json");
@@ -1357,19 +1387,21 @@ fn dependency_relationship_findings(
     );
     let python_lockfile = changed_any_file(candidate_files, &["poetry.lock"]);
 
-    if rust_manifest.is_some() && rust_lockfile.is_none() {
-        findings.push(Finding::new(
-            "dependency.lockfile.missing.rust",
-            scanner,
-            Severity::Medium,
-            Confidence::High,
-            FindingCategory::Dependency,
-            rust_manifest.cloned(),
-            "Cargo manifest changed without a lockfile update",
-            "A Rust dependency manifest is part of the outbound change set, but `Cargo.lock` is not.",
-            "Review whether the change should also update `Cargo.lock` to preserve a reviewable dependency snapshot.",
-            "dependency-lockfile-missing:rust",
-        ));
+    if let Some(rust_manifest) = rust_manifest {
+        if rust_lockfile.is_none() && cargo_dependency_snapshot_changed(context, rust_manifest)? {
+            findings.push(Finding::new(
+                "dependency.lockfile.missing.rust",
+                scanner,
+                Severity::Medium,
+                Confidence::High,
+                FindingCategory::Dependency,
+                Some(rust_manifest.to_path_buf()),
+                "Cargo manifest changed without a lockfile update",
+                "A Rust dependency manifest is part of the outbound change set, but `Cargo.lock` is not.",
+                "Review whether the change should also update `Cargo.lock` to preserve a reviewable dependency snapshot.",
+                "dependency-lockfile-missing:rust",
+            ));
+        }
     }
 
     if node_manifest.is_some() && node_lockfile.is_none() {
@@ -1402,7 +1434,7 @@ fn dependency_relationship_findings(
         ));
     }
 
-    findings
+    Ok(findings)
 }
 
 fn scan_cargo_manifest(scanner: &'static str, file: &Path, contents: &str) -> Vec<Finding> {
@@ -2360,6 +2392,81 @@ fn changed_any_path_suffix<'a>(
     })
 }
 
+fn cargo_dependency_snapshot_changed(
+    context: &ExecutionContext,
+    manifest_path: &Path,
+) -> AppResult<bool> {
+    let current_manifest = fs::read_to_string(context.repo_root.join(manifest_path))?;
+    let current_snapshot = cargo_dependency_snapshot(&current_manifest);
+    let Some(baseline_manifest) = baseline_file_contents(context, manifest_path)? else {
+        return Ok(!current_snapshot.is_empty());
+    };
+    let baseline_snapshot = cargo_dependency_snapshot(&baseline_manifest);
+    Ok(current_snapshot != baseline_snapshot)
+}
+
+fn baseline_file_contents(context: &ExecutionContext, path: &Path) -> AppResult<Option<String>> {
+    if !context.repo_root.join(".git").exists() {
+        return Ok(None);
+    }
+
+    let reference = match context.action {
+        ProtectedAction::Scan => Some("HEAD"),
+        ProtectedAction::Push => match context.push_status.as_ref() {
+            Some(PushStatus::Ready {
+                upstream_branch: Some(upstream),
+                ..
+            }) => Some(upstream.as_str()),
+            Some(PushStatus::Ready {
+                upstream_branch: None,
+                ..
+            }) => None,
+            _ => None,
+        },
+    };
+
+    let Some(reference) = reference else {
+        return Ok(None);
+    };
+
+    git::file_contents_at_ref(&context.repo_root, reference, path)
+}
+
+fn cargo_dependency_snapshot(contents: &str) -> Vec<String> {
+    let mut snapshot = Vec::new();
+    let mut current_section = String::new();
+
+    for line in contents.lines() {
+        let trimmed = strip_inline_comment(line).trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            current_section = trimmed.to_string();
+            if cargo_dependency_section_name(trimmed).is_some() {
+                snapshot.push(trimmed.to_string());
+            }
+            continue;
+        }
+
+        if cargo_dependency_section_name(&current_section).is_some() {
+            snapshot.push(trimmed.to_string());
+        }
+    }
+
+    snapshot
+}
+
+fn cargo_dependency_section_name(section: &str) -> Option<&str> {
+    if section.contains("dependencies") || section.starts_with("[patch.") || section == "[replace]"
+    {
+        return Some(section);
+    }
+
+    None
+}
+
 fn read_text_file(path: &Path) -> AppResult<Option<String>> {
     let metadata = match fs::metadata(path) {
         Ok(metadata) => metadata,
@@ -2386,6 +2493,80 @@ fn record_finding(findings: &mut Vec<Finding>, seen: &mut HashSet<String>, findi
     if seen.insert(finding.fingerprint.clone()) {
         findings.push(finding);
     }
+}
+
+fn rust_test_line_mask(file: &Path, contents: &str) -> Vec<bool> {
+    if file.extension().and_then(|value| value.to_str()) != Some("rs") {
+        return Vec::new();
+    }
+
+    let mut mask = vec![false; contents.lines().count() + 1];
+    let mut brace_depth = 0isize;
+    let mut pending_cfg_test = false;
+    let mut pending_test_fn = false;
+    let mut active_blocks = Vec::new();
+
+    for (index, line) in contents.lines().enumerate() {
+        let line_number = index + 1;
+        let trimmed = line.trim();
+
+        if !active_blocks.is_empty() {
+            mask[line_number] = true;
+        }
+
+        if trimmed.starts_with("#[cfg(test)]") {
+            pending_cfg_test = true;
+            mask[line_number] = true;
+        }
+
+        if trimmed.starts_with("#[test]") {
+            pending_test_fn = true;
+            mask[line_number] = true;
+        }
+
+        if pending_cfg_test && looks_like_rust_test_block_start(trimmed) {
+            active_blocks.push(brace_depth);
+            pending_cfg_test = false;
+            mask[line_number] = true;
+        } else if pending_test_fn && looks_like_rust_function_start(trimmed) {
+            active_blocks.push(brace_depth);
+            pending_test_fn = false;
+            mask[line_number] = true;
+        } else if !trimmed.is_empty() && !trimmed.starts_with("#[") {
+            pending_cfg_test = false;
+            pending_test_fn = false;
+        }
+
+        brace_depth += brace_delta(line);
+        while active_blocks
+            .last()
+            .is_some_and(|start_depth| brace_depth <= *start_depth)
+        {
+            active_blocks.pop();
+        }
+    }
+
+    mask
+}
+
+fn looks_like_rust_test_block_start(trimmed: &str) -> bool {
+    trimmed.contains('{')
+        && (trimmed.starts_with("mod ")
+            || trimmed.starts_with("pub mod ")
+            || trimmed.starts_with("fn ")
+            || trimmed.starts_with("pub fn "))
+}
+
+fn looks_like_rust_function_start(trimmed: &str) -> bool {
+    trimmed.contains('{')
+        && (trimmed.starts_with("fn ")
+            || trimmed.starts_with("pub fn ")
+            || trimmed.starts_with("async fn ")
+            || trimmed.starts_with("pub async fn "))
+}
+
+fn should_skip_line(mask: &[bool], line_number: usize) -> bool {
+    mask.get(line_number).copied().unwrap_or(false)
 }
 
 fn strip_inline_comment(line: &str) -> &str {
@@ -2638,6 +2819,27 @@ fn is_execution_surface(file: &Path) -> bool {
         || lower.ends_with(".ps1")
 }
 
+fn generic_sast_pattern_applies_to_file(file: &Path, needle: &str) -> bool {
+    let lower = file.to_string_lossy().to_ascii_lowercase();
+    let extension = file
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    match needle {
+        "eval(" | "innerHTML" => matches!(
+            extension.as_str(),
+            "js" | "jsx" | "ts" | "tsx" | "html" | "htm" | "vue" | "svelte" | "astro"
+        ),
+        "Runtime.getRuntime().exec" => {
+            matches!(extension.as_str(), "java" | "kt" | "kts" | "groovy")
+                || lower.ends_with(".gradle")
+        }
+        _ => true,
+    }
+}
+
 fn parse_json_dependency_entry(line: &str) -> Option<(&str, &str)> {
     let trimmed = line.trim().trim_end_matches(',');
     let trimmed = trimmed.strip_prefix('"')?;
@@ -2756,16 +2958,19 @@ impl CharacterClass {
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::{BasicSastScanner, ConfigScanner, DependencyScanner, Scanner, SecretScanner};
+    use super::{
+        cargo_dependency_snapshot, generic_sast_pattern_applies_to_file, rust_test_line_mask,
+        BasicSastScanner, ConfigScanner, DependencyScanner, Scanner, SecretScanner,
+    };
     use crate::core::config::{ConfigSource, ResolvedConfig};
     use crate::core::context::{ExecutionContext, ProtectedAction};
     use crate::core::findings::{Confidence, Severity};
     use crate::core::policy::EnforcementMode;
     use crate::core::receipts::ReceiptIndex;
     use std::fs;
-    use std::path::PathBuf;
 
     static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -3002,6 +3207,62 @@ mod tests {
             1
         );
         fs::remove_dir_all(root).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
+    fn ignores_secret_fixtures_inside_rust_test_modules() {
+        let (context, root) = test_context(&[(
+            "src/lib.rs",
+            "#[cfg(test)]\nmod tests {\n    #[test]\n    fn fixture() {\n        let request = \"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.signature\";\n        assert!(!request.is_empty());\n    }\n}\n",
+        )]);
+
+        let findings = SecretScanner.scan(&context).expect("scan should succeed");
+
+        assert!(
+            findings.is_empty(),
+            "expected no secret findings from rust test fixtures, got: {findings:#?}"
+        );
+        fs::remove_dir_all(root).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
+    fn generic_sast_patterns_ignore_rust_detector_source() {
+        assert!(!generic_sast_pattern_applies_to_file(
+            Path::new("src/core/scanners.rs"),
+            "eval("
+        ));
+        assert!(generic_sast_pattern_applies_to_file(
+            Path::new("web/app.ts"),
+            "eval("
+        ));
+    }
+
+    #[test]
+    fn cargo_dependency_snapshot_ignores_package_metadata_only_changes() {
+        let baseline = "[package]\nname = \"wolfence\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1\"\n";
+        let metadata_only_change = "[package]\nname = \"wolfence\"\ndefault-run = \"wolf\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1\"\n";
+        let dependency_change = "[package]\nname = \"wolfence\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1\"\nserde_json = \"1\"\n";
+
+        assert_eq!(
+            cargo_dependency_snapshot(baseline),
+            cargo_dependency_snapshot(metadata_only_change)
+        );
+        assert_ne!(
+            cargo_dependency_snapshot(baseline),
+            cargo_dependency_snapshot(dependency_change)
+        );
+    }
+
+    #[test]
+    fn rust_test_line_mask_marks_test_module_fixture_lines() {
+        let mask = rust_test_line_mask(
+            Path::new("src/lib.rs"),
+            "#[cfg(test)]\nmod tests {\n    #[test]\n    fn fixture() {\n        let request = \"Authorization: Bearer token\";\n    }\n}\n",
+        );
+
+        assert!(mask[1]);
+        assert!(mask[2]);
+        assert!(mask[5]);
     }
 
     #[test]
