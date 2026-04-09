@@ -22,7 +22,7 @@ committed to the repository.
 
 Wolfence currently records:
 
-- `wolfence push`
+- `wolf push`
 - managed `pre-push` hook evaluations
 
 This includes:
@@ -47,6 +47,7 @@ Each audit entry currently includes:
 - detail when Wolfence needs to preserve transport or evaluation context
 - verdict
 - candidate file count
+- discovered and ignored candidate-file counts for newer exclusion-aware audit entries
 - finding counts
 - warning count
 - block count
@@ -72,7 +73,7 @@ Every entry stores:
 
 ## Verification
 
-`wolfence doctor` verifies the chain by:
+`wolf doctor` verifies the chain by:
 
 - reading entries in order
 - checking sequence continuity

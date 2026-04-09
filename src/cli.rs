@@ -74,13 +74,21 @@ pub enum AuditCommand {
     Help,
 }
 
+/// Parsed scan-specific operator workflows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScanCommand {
+    Staged,
+    Push,
+    Help,
+}
+
 /// Parsed top-level command plus any validated arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Init,
     Push,
     HookPrePush,
-    Scan,
+    Scan(ScanCommand),
     Doctor,
     Config,
     Receipt(ReceiptCommand),
@@ -110,10 +118,7 @@ impl Cli {
                 ensure_no_extra_args(args)?;
                 Command::HookPrePush
             }
-            Some("scan") => {
-                ensure_no_extra_args(args)?;
-                Command::Scan
-            }
+            Some("scan") => Command::Scan(parse_scan_command(args)?),
             Some("doctor") => {
                 ensure_no_extra_args(args)?;
                 Command::Doctor
@@ -135,7 +140,7 @@ impl Cli {
             }
             Some(other) => {
                 return Err(format!(
-                    "unknown command `{other}`. Run `wolfence help` to see the supported interface."
+                    "unknown command `{other}`. Run `wolf help` to see the supported interface."
                 ))
             }
         };
@@ -207,7 +212,7 @@ where
         }
         Some(other) => {
             return Err(format!(
-                "unknown receipt command `{other}`. Run `wolfence receipt help` to see the supported receipt workflows."
+                "unknown receipt command `{other}`. Run `wolf receipt help` to see the supported receipt workflows."
             ))
         }
     };
@@ -259,7 +264,7 @@ where
         }
         Some(other) => {
             return Err(format!(
-                "unknown trust command `{other}`. Run `wolfence trust help` to see the supported trust workflows."
+                "unknown trust command `{other}`. Run `wolf trust help` to see the supported trust workflows."
             ))
         }
     };
@@ -286,7 +291,35 @@ where
         }
         Some(other) => {
             return Err(format!(
-                "unknown audit command `{other}`. Run `wolfence audit help` to see the supported audit workflows."
+                "unknown audit command `{other}`. Run `wolf audit help` to see the supported audit workflows."
+            ))
+        }
+    };
+
+    Ok(subcommand)
+}
+
+fn parse_scan_command<I>(mut args: I) -> Result<ScanCommand, String>
+where
+    I: Iterator<Item = String>,
+{
+    let subcommand = match args.next().as_deref() {
+        None => ScanCommand::Staged,
+        Some("push" | "--push") => {
+            ensure_no_extra_args(args)?;
+            ScanCommand::Push
+        }
+        Some("staged" | "--staged") => {
+            ensure_no_extra_args(args)?;
+            ScanCommand::Staged
+        }
+        Some("-h" | "--help" | "help") => {
+            ensure_no_extra_args(args)?;
+            ScanCommand::Help
+        }
+        Some(other) => {
+            return Err(format!(
+                "unknown scan command `{other}`. Run `wolf scan help` to see the supported scan workflows."
             ))
         }
     };
@@ -317,7 +350,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{AuditCommand, Cli, Command, ReceiptCommand, TrustCommand};
+    use super::{AuditCommand, Cli, Command, ReceiptCommand, ScanCommand, TrustCommand};
 
     #[test]
     fn defaults_to_help_when_no_arguments_are_provided() {
@@ -329,6 +362,19 @@ mod tests {
     fn parses_push_command() {
         let cli = Cli::parse(vec!["push".to_string()].into_iter()).expect("parse should succeed");
         assert_eq!(cli.command, Command::Push);
+    }
+
+    #[test]
+    fn parses_staged_scan_by_default() {
+        let cli = Cli::parse(vec!["scan".to_string()].into_iter()).expect("parse should succeed");
+        assert_eq!(cli.command, Command::Scan(ScanCommand::Staged));
+    }
+
+    #[test]
+    fn parses_push_scope_scan_command() {
+        let cli = Cli::parse(vec!["scan".to_string(), "push".to_string()].into_iter())
+            .expect("parse should succeed");
+        assert_eq!(cli.command, Command::Scan(ScanCommand::Push));
     }
 
     #[test]

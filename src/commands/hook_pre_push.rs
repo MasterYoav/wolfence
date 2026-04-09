@@ -1,7 +1,7 @@
 //! Internal pre-push hook entrypoint.
 //!
 //! This command is meant to be called by Git hooks, not by end users directly.
-//! It reuses the same push-evaluation logic as `wolfence push`, but it never
+//! It reuses the same push-evaluation logic as `wolf push`, but it never
 //! executes `git push` itself.
 
 use std::process::ExitCode;
@@ -28,7 +28,9 @@ pub fn run() -> AppResult<ExitCode> {
                     outcome: "no-op",
                     detail: None,
                     verdict: None,
+                    discovered_files: 0,
                     candidate_files: 0,
+                    ignored_files: 0,
                     findings: 0,
                     warnings: 0,
                     blocks: 0,
@@ -55,7 +57,9 @@ pub fn run() -> AppResult<ExitCode> {
                     outcome: "no-op",
                     detail: None,
                     verdict: None,
+                    discovered_files: 0,
                     candidate_files: 0,
+                    ignored_files: 0,
                     findings: 0,
                     warnings: 0,
                     blocks: 0,
@@ -89,8 +93,9 @@ pub fn run() -> AppResult<ExitCode> {
                     .unwrap_or("<none: initial push mode>")
             );
             println!("  commits ahead: {}", commits_ahead);
-            println!("  candidate files: {}", report.scanned_files);
+            protected::print_scan_scope(&report, &context);
             println!("  findings: {}", report.findings.len());
+            protected::print_finding_summary(&report.findings);
             println!("  warnings: {}", decision.warning_findings.len());
             println!("  blocks: {}", decision.blocking_findings.len());
             println!(
@@ -116,7 +121,9 @@ pub fn run() -> AppResult<ExitCode> {
                     outcome,
                     detail: None,
                     verdict: Some(decision.verdict),
+                    discovered_files: report.discovered_files,
                     candidate_files: report.scanned_files,
+                    ignored_files: report.ignored_files,
                     findings: report.findings.len(),
                     warnings: decision.warning_findings.len(),
                     blocks: decision.blocking_findings.len(),
@@ -144,8 +151,8 @@ mod tests {
     use std::env;
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::process::ExitCode;
     use std::process::Command;
+    use std::process::ExitCode;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::run;

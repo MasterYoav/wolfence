@@ -1,4 +1,4 @@
-//! `wolfence receipt ...`
+//! `wolf receipt ...`
 //!
 //! Signed override receipts are only useful if operators can generate them
 //! deterministically. This command surface keeps receipt checksum generation and

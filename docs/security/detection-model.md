@@ -43,9 +43,13 @@ The scanner looks for token families with strong prefixes or shapes, including:
 
 - AWS access key identifiers
 - GitHub personal and fine-grained tokens
+- GitLab personal access tokens
+- Hugging Face tokens
 - Slack tokens
+- Slack and Discord webhook URLs
 - Stripe live keys
 - npm auth tokens
+- SendGrid API keys
 - private key PEM headers
 
 These findings should usually be treated as high-confidence incidents.
@@ -72,6 +76,9 @@ This is the main false-positive control layer.
 The scanner detects URLs with inline credentials such as:
 
 - `https://user:password@example.com`
+- `.npmrc` auth lines such as `//registry.npmjs.org/:_authToken=...`
+- `.netrc` `password ...` machine entries
+- `.pypirc` password or token assignments
 - `Authorization: Bearer <token>`
 - `Authorization: Basic <base64>`
 - `X-API-Key: <token>`
@@ -154,6 +161,24 @@ Current examples include:
 - Kubernetes `Secret` manifests with inline `data` or `stringData`
 - GitHub Actions workflows with `permissions: write-all`
 - GitHub Actions `pull_request_target` workflows, especially when they reference pull-request head content
+
+## Lightweight SAST Signals
+
+Wolfence also applies a small set of line-level code and script heuristics for
+obviously risky execution paths.
+
+Current examples include:
+
+- `eval(` dynamic execution
+- `Runtime.getRuntime().exec` command execution sinks
+- `innerHTML` raw HTML sinks
+- remote script execution patterns such as `curl ... | sh`, `wget ... | bash`,
+  or `Invoke-WebRequest ... | iex`
+
+These are intentionally high-signal, local heuristics rather than a full static
+analysis engine. Remote-script execution is severity-scaled by path: it is
+treated as higher severity in real execution surfaces such as CI workflows,
+shell scripts, PowerShell, and Dockerfiles than in generic text or docs files.
 
 ## Confidence Philosophy
 

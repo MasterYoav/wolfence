@@ -39,6 +39,7 @@ Each listed entry includes:
 - outcome
 - verdict
 - finding counts
+- discovered, scanned, and ignored candidate-file counts when exclusion-aware scope data is available
 - override and receipt-issue counts
 - branch or upstream metadata when present
 - detail when Wolfence needs to preserve push-transport context
@@ -60,7 +61,7 @@ instead of a misleading single “allowed” outcome.
 
 ## Relationship To `doctor`
 
-`wolfence doctor` verifies the audit chain as one health check.
+`wolf doctor` verifies the audit chain as one health check.
 
 Use `audit verify` when you only want the chain result.
 

@@ -11,6 +11,7 @@ before external scanner integrations are added.
 ```bash
 cargo fmt
 cargo test
+cargo install --path . --force
 cargo run -- init
 cargo run -- config
 cargo run -- doctor
@@ -27,12 +28,23 @@ cargo run -- receipt new .wolfence/receipts/allow.toml push secret secret:abc123
 cargo run -- receipt verify .wolfence/receipts/allow.toml
 cargo run -- receipt archive .wolfence/receipts/allow.toml "Underlying issue resolved"
 cargo run -- scan
+cargo run -- scan push
 cargo run -- push
+```
+
+After `cargo install --path . --force`, the intended operator interface is:
+
+```bash
+wolf init
+wolf doctor
+wolf scan
+wolf scan push
+wolf push
 ```
 
 ## Current Command Status
 
-- `scan`: real scaffold path that inspects staged files and runs heuristic scanners
+- `scan`: real scaffold path that previews policy on staged files or the real outbound push scope without invoking `git push`; both staged and push preview modes exit non-zero when the preview would block
 - `push`: real guarded push path that evaluates outbound branch content before delegating to `git push`
 - `init`: creates repo-local config and installs a managed `pre-push` hook
 - `doctor`: audits whether the local enforcement path is actually trustworthy

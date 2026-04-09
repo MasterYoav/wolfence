@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`wolfence doctor` exists to answer one operational question:
+`wolf doctor` exists to answer one operational question:
 
 Is this repository actually protected the way the operator thinks it is?
 
@@ -62,6 +62,15 @@ least-privilege signers.
 
 Explains whether the effective mode is advisory, standard, or strict, and what
 that means for enforcement.
+
+### Scan exclusions
+
+Checks whether repo-local scan exclusions are configured and whether they cover
+higher-risk paths.
+
+- no exclusions: informational only
+- narrow exclusions such as `docs/` or fixture trees: pass with remediation guidance
+- exclusions covering source, CI, manifest, lockfile, or Wolfence policy paths: warning
 
 ### Environment overrides
 
@@ -129,12 +138,13 @@ Reports whether:
 - the branch has no commits
 - the branch is up to date
 - the branch is ahead and how many candidate files are in scope
+- the current outbound push window includes files that repo-local exclusions would ignore
 
 This is informational context for the current repository state.
 
 ## Exit Behavior
 
-`wolfence doctor` exits non-zero only when it finds blocking environment
+`wolf doctor` exits non-zero only when it finds blocking environment
 failures, such as:
 
 - a managed hook that is not executable
@@ -149,5 +159,5 @@ Warnings do not fail the command, but they should not be ignored.
 ## Why This Matters
 
 A security product loses trust when the UI says "protected" but the operator's
-actual workflow bypasses the control. `wolfence doctor` is the current local
+actual workflow bypasses the control. `wolf doctor` is the current local
 reality check for that problem.

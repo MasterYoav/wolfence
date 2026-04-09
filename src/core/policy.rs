@@ -263,7 +263,9 @@ mod tests {
                 "Remove the secret and rotate the credential.",
                 "abc123",
             )],
+            discovered_files: 1,
             scanned_files: 1,
+            ignored_files: 0,
             scanners_run: 1,
         };
 
@@ -291,7 +293,9 @@ mod tests {
                 "Replace dynamic execution with a fixed dispatch table.",
                 "def456",
             )],
+            discovered_files: 1,
             scanned_files: 1,
+            ignored_files: 0,
             scanners_run: 1,
         };
 
@@ -319,7 +323,9 @@ mod tests {
                 "Regenerate the lockfile with integrity hashes intact.",
                 "lock:missing-integrity",
             )],
+            discovered_files: 1,
             scanned_files: 1,
+            ignored_files: 0,
             scanners_run: 1,
         };
 
@@ -347,7 +353,9 @@ mod tests {
                 "Validate the data flow before allowing the push.",
                 "sast:template-injection",
             )],
+            discovered_files: 1,
             scanned_files: 1,
+            ignored_files: 0,
             scanners_run: 1,
         };
 
@@ -375,7 +383,9 @@ mod tests {
                 "Confirm the path dependency is intentional.",
                 "dependency-cargo-path:Cargo.toml:12",
             )],
+            discovered_files: 1,
             scanned_files: 1,
+            ignored_files: 0,
             scanners_run: 1,
         };
 
@@ -425,7 +435,9 @@ mod tests {
                 "Remove the secret and rotate the credential.",
                 "abc123",
             )],
+            discovered_files: 1,
             scanned_files: 1,
+            ignored_files: 0,
             scanners_run: 1,
         };
 

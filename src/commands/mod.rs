@@ -27,7 +27,7 @@ pub fn execute(command: Command) -> AppResult<ExitCode> {
         Command::Init => init::run(),
         Command::Push => push::run(),
         Command::HookPrePush => hook_pre_push::run(),
-        Command::Scan => scan::run(),
+        Command::Scan(command) => scan::run(command),
         Command::Doctor => doctor::run(),
         Command::Config => config::run(),
         Command::Receipt(command) => receipt::run(command),
@@ -38,7 +38,7 @@ pub fn execute(command: Command) -> AppResult<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Version => {
-            println!("wolfence {}", env!("CARGO_PKG_VERSION"));
+            println!("wolf {}", env!("CARGO_PKG_VERSION"));
             Ok(ExitCode::SUCCESS)
         }
     }
@@ -49,7 +49,7 @@ fn print_help() {
     println!("  Security-first Git interface for local safety gates");
     println!();
     println!("Usage:");
-    println!("  wolfence <command>");
+    println!("  wolf <command>");
     println!();
     println!("Commands:");
     println!("  init     Initialize repo-local Wolfence configuration");
@@ -71,6 +71,7 @@ fn print_help() {
     print_receipt_help_summary();
     print_trust_help_summary();
     print_audit_help_summary();
+    print_scan_help_summary();
 }
 
 fn print_receipt_help_summary() {
@@ -96,4 +97,11 @@ fn print_audit_help_summary() {
     println!("Audit Commands:");
     println!("  audit list");
     println!("  audit verify");
+}
+
+fn print_scan_help_summary() {
+    println!("Scan Commands:");
+    println!("  scan");
+    println!("  scan staged");
+    println!("  scan push");
 }

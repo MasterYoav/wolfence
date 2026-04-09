@@ -258,7 +258,7 @@ Wolfence currently verifies signatures through the local `openssl` executable.
 
 Operational implications:
 
-- `wolfence doctor` checks whether `openssl` is available
+- `wolf doctor` checks whether `openssl` is available
 - if signed receipts are required and `openssl` is unavailable, doctor fails
 - if signed receipts are not yet required, missing `openssl` is only a warning
 

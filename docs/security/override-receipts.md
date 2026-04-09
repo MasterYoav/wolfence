@@ -10,7 +10,7 @@ The current model uses repo-local override receipts so an exception is:
 - scoped
 - time-bounded
 - reviewable
-- visible to `wolfence doctor`
+- visible to `wolf doctor`
 - optionally signature-backed once the repo publishes trusted keys
 
 ## Location
@@ -252,7 +252,7 @@ When signed receipts are required, Wolfence also ignores a receipt when:
 - the repo approval policy rejects the receipt category, reviewer, approver, or lifetime
 
 Ignored receipts do not weaken enforcement. They simply fail closed and appear
-as receipt issues in `wolfence doctor` and protected push output.
+as receipt issues in `wolf doctor` and protected push output.
 
 ## Operational Guidance
 

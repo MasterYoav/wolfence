@@ -1,4 +1,4 @@
-//! `wolfence push`
+//! `wolf push`
 //!
 //! This is the highest-value workflow in the product. Even in scaffold form,
 //! the command executes the same sequence the final system will need:
@@ -35,7 +35,9 @@ pub fn run() -> AppResult<ExitCode> {
                     outcome: "no-op",
                     detail: None,
                     verdict: None,
+                    discovered_files: 0,
                     candidate_files: 0,
+                    ignored_files: 0,
                     findings: 0,
                     warnings: 0,
                     blocks: 0,
@@ -63,7 +65,9 @@ pub fn run() -> AppResult<ExitCode> {
                     outcome: "no-op",
                     detail: None,
                     verdict: None,
+                    discovered_files: 0,
                     candidate_files: 0,
+                    ignored_files: 0,
                     findings: 0,
                     warnings: 0,
                     blocks: 0,
@@ -99,8 +103,9 @@ pub fn run() -> AppResult<ExitCode> {
                     .unwrap_or("<none: initial push mode>")
             );
             println!("  commits ahead: {}", commits_ahead);
-            println!("  candidate files: {}", report.scanned_files);
+            protected::print_scan_scope(&report, &context);
             println!("  findings: {}", report.findings.len());
+            protected::print_finding_summary(&report.findings);
             println!("  warnings: {}", decision.warning_findings.len());
             println!("  blocks: {}", decision.blocking_findings.len());
             println!(
@@ -129,7 +134,9 @@ pub fn run() -> AppResult<ExitCode> {
                             outcome,
                             detail: None,
                             verdict: Some(decision.verdict),
+                            discovered_files: report.discovered_files,
                             candidate_files: report.scanned_files,
+                            ignored_files: report.ignored_files,
                             findings: report.findings.len(),
                             warnings: decision.warning_findings.len(),
                             blocks: decision.blocking_findings.len(),
@@ -161,7 +168,9 @@ pub fn run() -> AppResult<ExitCode> {
                                     outcome: "push-completed",
                                     detail: None,
                                     verdict: Some(decision.verdict),
+                                    discovered_files: report.discovered_files,
                                     candidate_files: report.scanned_files,
+                                    ignored_files: report.ignored_files,
                                     findings: report.findings.len(),
                                     warnings: decision.warning_findings.len(),
                                     blocks: decision.blocking_findings.len(),
@@ -186,7 +195,9 @@ pub fn run() -> AppResult<ExitCode> {
                                     outcome: "push-failed",
                                     detail: Some(detail.clone()),
                                     verdict: Some(decision.verdict),
+                                    discovered_files: report.discovered_files,
                                     candidate_files: report.scanned_files,
+                                    ignored_files: report.ignored_files,
                                     findings: report.findings.len(),
                                     warnings: decision.warning_findings.len(),
                                     blocks: decision.blocking_findings.len(),
@@ -213,7 +224,9 @@ pub fn run() -> AppResult<ExitCode> {
                             outcome,
                             detail: None,
                             verdict: Some(decision.verdict),
+                            discovered_files: report.discovered_files,
                             candidate_files: report.scanned_files,
+                            ignored_files: report.ignored_files,
                             findings: report.findings.len(),
                             warnings: decision.warning_findings.len(),
                             blocks: decision.blocking_findings.len(),
@@ -298,6 +311,34 @@ mod tests {
     }
 
     #[test]
+    fn push_respects_repo_scan_exclusions_for_docs_paths() {
+        let _guard = process_lock();
+        let repo_root = make_temp_repo("push-ignore-docs");
+        initialize_repo(&repo_root);
+        write_repo_config(
+            &repo_root,
+            "[policy]\nmode = \"standard\"\n\n[scan]\nignore_paths = [\"docs/\"]\n",
+        );
+        fs::create_dir_all(repo_root.join("docs")).expect("should create docs dir");
+        fs::write(
+            repo_root.join("docs/request.md"),
+            "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.signature\n",
+        )
+        .expect("should write docs fixture");
+        commit_all(&repo_root, "add ignored docs file");
+
+        let previous_dir = env::current_dir().expect("current dir should resolve");
+        let previous_dry_run = env::var("WOLFENCE_DRY_RUN").ok();
+        env::set_current_dir(&repo_root).expect("should enter repo");
+        env::set_var("WOLFENCE_DRY_RUN", "1");
+
+        let result = run().expect("push command should run");
+
+        restore_process_state(&previous_dir, previous_dry_run);
+        assert_eq!(result, std::process::ExitCode::SUCCESS);
+    }
+
+    #[test]
     fn push_audits_transport_failure_when_policy_allows_but_no_remote_exists() {
         let _guard = process_lock();
         let repo_root = make_temp_repo("push-no-remote");
@@ -344,6 +385,12 @@ mod tests {
         run_git(repo_root, &["init", "-b", "main"]);
         run_git(repo_root, &["config", "user.name", "Wolfence Test"]);
         run_git(repo_root, &["config", "user.email", "wolfence@example.com"]);
+    }
+
+    fn write_repo_config(repo_root: &Path, contents: &str) {
+        let config_dir = repo_root.join(".wolfence");
+        fs::create_dir_all(&config_dir).expect("should create config dir");
+        fs::write(config_dir.join("config.toml"), contents).expect("should write repo config");
     }
 
     fn commit_all(repo_root: &Path, message: &str) {

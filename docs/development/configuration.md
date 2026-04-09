@@ -18,6 +18,10 @@ policy engine behind it.
 
 Policy-related settings for this repository.
 
+### `[scan]`
+
+Scanner scope controls for this repository.
+
 ### `mode`
 
 Supported values:
@@ -31,6 +35,31 @@ Behavior:
 - `advisory`: never block, but still warn on medium-and-above findings and other high-confidence non-vulnerability signals
 - `standard`: block high and critical findings, and also block medium high-confidence non-vulnerability findings
 - `strict`: block medium-and-above findings, and also block low high-confidence non-vulnerability findings
+
+### `ignore_paths`
+
+Repository-relative paths or path prefixes to exclude from scanning.
+
+Supported shapes:
+
+- `docs/`
+- `fixtures/**`
+- `README.md`
+
+Invalid shapes are rejected during config loading. In particular, Wolfence does
+not allow root-wide or ambiguous patterns such as `.`, `./`, `/`, `*`, `**`,
+absolute paths, parent-directory traversal, or unsupported wildcard forms like
+`docs/*`.
+
+Use this sparingly. It is intended for documentation examples, generated
+artifacts, or known fixture trees that would otherwise create non-production
+noise.
+
+When exclusions are active, `wolf scan`, `wolf push`, and the managed
+`pre-push` hook print both the discovered candidate-file count and the ignored
+count so the reduced scan surface is explicit at runtime.
+`wolf doctor` also warns if exclusions cover higher-risk paths such as
+`src/`, `.github/`, lockfiles, manifests, or Wolfence policy directories.
 
 ## Precedence
 
@@ -48,7 +77,7 @@ Temporarily override the effective policy mode without editing repo config.
 
 ### `WOLFENCE_DRY_RUN`
 
-When set to `1`, `true`, or `yes`, `wolfence push` still evaluates the real
+When set to `1`, `true`, or `yes`, `wolf push` still evaluates the real
 push candidate set and policy decision, but skips the final `git push`
 execution. This is useful while developing Wolfence itself.
 
@@ -204,4 +233,7 @@ artifact.
 ```toml
 [policy]
 mode = "standard"
+
+[scan]
+ignore_paths = ["docs/examples/", "fixtures/**"]
 ```

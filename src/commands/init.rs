@@ -1,4 +1,4 @@
-//! `wolfence init`
+//! `wolf init`
 //!
 //! The initialization flow creates the first repo-local Wolfence config file.
 //! This makes the local security posture explicit and gives future policy work a
@@ -143,7 +143,7 @@ pub fn run() -> AppResult<ExitCode> {
     println!("    - read docs/security/trust-store.md before adopting signed receipts");
     println!("    - add public keys to .wolfence/trust/ if you want signed receipts");
     println!("    - audit log will be written to .wolfence/audit/decisions.jsonl");
-    println!("    - run `cargo run -- scan`");
+    println!("    - run `wolf scan`");
     println!("    - use `git push` to exercise the installed hook");
 
     Ok(ExitCode::SUCCESS)

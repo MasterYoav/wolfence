@@ -1,4 +1,4 @@
-//! `wolfence trust ...`
+//! `wolf trust ...`
 //!
 //! Trust material should be reviewable and operationally legible. This command
 //! surface lets operators inspect repo-local trust keys and create the metadata

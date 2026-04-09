@@ -115,9 +115,10 @@ profile of the product:
 
 The MVP should focus on:
 
-- `wolfence scan`
-- `wolfence push`
-- `wolfence doctor`
+- `wolf scan`
+- staged and push-scope preview modes
+- `wolf push`
+- `wolf doctor`
 - outbound push delta discovery
 - built-in heuristic secret scanning
 - lightweight SAST signals

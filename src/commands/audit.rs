@@ -1,4 +1,4 @@
-//! `wolfence audit`
+//! `wolf audit`
 //!
 //! Operators should not need to open JSONL by hand just to understand what
 //! Wolfence decided locally. This command exposes a compact, reviewable view of
@@ -63,10 +63,21 @@ fn run_list() -> AppResult<ExitCode> {
             "      findings: {} total, {} warnings, {} blocks",
             entry.findings, entry.warnings, entry.blocks
         );
-        println!(
-            "      scope: {} candidate files, {} overrides, {} receipt issues",
-            entry.candidate_files, entry.overrides_applied, entry.receipt_issues
-        );
+        if entry.discovered_files > 0 || entry.ignored_files > 0 {
+            println!(
+                "      scope: {} discovered, {} scanned, {} ignored, {} overrides, {} receipt issues",
+                entry.discovered_files,
+                entry.candidate_files,
+                entry.ignored_files,
+                entry.overrides_applied,
+                entry.receipt_issues
+            );
+        } else {
+            println!(
+                "      scope: {} candidate files, {} overrides, {} receipt issues",
+                entry.candidate_files, entry.overrides_applied, entry.receipt_issues
+            );
+        }
         if let Some(branch) = &entry.branch {
             println!("      branch: {branch}");
         }
@@ -116,7 +127,7 @@ fn print_help() {
     println!("  List and verify the local Wolfence audit chain");
     println!();
     println!("Usage:");
-    println!("  wolfence audit <command>");
+    println!("  wolf audit <command>");
     println!();
     println!("Commands:");
     println!("  list    Show audit log health and the 10 most recent entries");

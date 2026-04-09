@@ -6,10 +6,13 @@
 
 use crate::app::AppResult;
 use crate::core::context::{ExecutionContext, ProtectedAction};
+use crate::core::findings::{Finding, FindingCategory, Severity};
 use crate::core::git::PushStatus;
 use crate::core::orchestrator::{Orchestrator, ScanReport};
 use crate::core::policy::{OverriddenFinding, PolicyDecision, PolicyFinding};
 use crate::core::receipts::ReceiptIssue;
+
+const FILE_SAMPLE_LIMIT: usize = 8;
 
 /// Evaluation result for a protected push.
 #[derive(Debug, Clone)]
@@ -79,6 +82,51 @@ pub fn print_decision_findings(decision: &PolicyDecision) {
     }
 }
 
+/// Prints the effective scan scope, including repo-local exclusions.
+pub fn print_scan_scope(report: &ScanReport, context: &ExecutionContext) {
+    println!("  candidate files discovered: {}", report.discovered_files);
+    println!("  candidate files scanned: {}", report.scanned_files);
+    print_file_sample("scanned file sample", &context.candidate_files);
+
+    if report.ignored_files == 0 {
+        return;
+    }
+
+    println!(
+        "  candidate files ignored by config: {}",
+        report.ignored_files
+    );
+    println!(
+        "  ignore patterns: {}",
+        context.config.scan_ignore_paths.join(", ")
+    );
+    print_file_sample("ignored file sample", &context.ignored_candidate_files);
+}
+
+/// Prints high-level finding counts before detailed output.
+pub fn print_finding_summary(findings: &[Finding]) {
+    if findings.is_empty() {
+        return;
+    }
+
+    println!(
+        "  severity summary: critical {}, high {}, medium {}, low {}, info {}",
+        count_by_severity(findings, Severity::Critical),
+        count_by_severity(findings, Severity::High),
+        count_by_severity(findings, Severity::Medium),
+        count_by_severity(findings, Severity::Low),
+        count_by_severity(findings, Severity::Info),
+    );
+    println!(
+        "  category summary: secret {}, vulnerability {}, dependency {}, configuration {}, policy {}",
+        count_by_category(findings, FindingCategory::Secret),
+        count_by_category(findings, FindingCategory::Vulnerability),
+        count_by_category(findings, FindingCategory::Dependency),
+        count_by_category(findings, FindingCategory::Configuration),
+        count_by_category(findings, FindingCategory::Policy),
+    );
+}
+
 /// Prints ignored receipt issues so the operator can see why an override did not apply.
 pub fn print_receipt_issues(issues: &[ReceiptIssue]) {
     if issues.is_empty() {
@@ -130,4 +178,34 @@ fn print_overridden_group(findings: &[OverriddenFinding]) {
         println!("      expires_on: {}", overridden.receipt.expires_on);
         println!("      reason: {}", overridden.receipt.reason);
     }
+}
+
+fn print_file_sample(label: &str, files: &[std::path::PathBuf]) {
+    if files.is_empty() {
+        return;
+    }
+
+    println!("  {label}:");
+    for path in files.iter().take(FILE_SAMPLE_LIMIT) {
+        println!("    - {}", path.display());
+    }
+
+    let remaining = files.len().saturating_sub(FILE_SAMPLE_LIMIT);
+    if remaining > 0 {
+        println!("    - ... and {remaining} more");
+    }
+}
+
+fn count_by_severity(findings: &[Finding], target: Severity) -> usize {
+    findings
+        .iter()
+        .filter(|finding| finding.severity == target)
+        .count()
+}
+
+fn count_by_category(findings: &[Finding], target: FindingCategory) -> usize {
+    findings
+        .iter()
+        .filter(|finding| finding.category == target)
+        .count()
 }

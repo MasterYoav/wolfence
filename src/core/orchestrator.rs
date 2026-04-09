@@ -18,7 +18,9 @@ use super::scanners::{
 #[derive(Debug, Clone)]
 pub struct ScanReport {
     pub findings: Vec<Finding>,
+    pub discovered_files: usize,
     pub scanned_files: usize,
+    pub ignored_files: usize,
     pub scanners_run: usize,
 }
 
@@ -54,7 +56,11 @@ impl Orchestrator {
 
         Ok(ScanReport {
             findings,
+            discovered_files: context.discovered_candidate_files,
             scanned_files: context.candidate_files.len(),
+            ignored_files: context
+                .discovered_candidate_files
+                .saturating_sub(context.candidate_files.len()),
             scanners_run: self.scanners.len(),
         })
     }
@@ -110,8 +116,12 @@ fn category_rank(value: FindingCategory) -> u8 {
 mod tests {
     use std::path::PathBuf;
 
-    use super::normalize_findings;
+    use super::{normalize_findings, Orchestrator};
+    use crate::core::config::{ConfigSource, ResolvedConfig};
+    use crate::core::context::{ExecutionContext, ProtectedAction};
     use crate::core::findings::{Confidence, Finding, FindingCategory, Severity};
+    use crate::core::policy::EnforcementMode;
+    use crate::core::receipts::ReceiptIndex;
 
     #[test]
     fn normalization_sorts_stronger_findings_first_and_deduplicates_fingerprints() {
@@ -159,5 +169,36 @@ mod tests {
         assert_eq!(findings.len(), 2);
         assert_eq!(findings[0].id, "secret.critical");
         assert_eq!(findings[1].id, "dependency.medium");
+    }
+
+    #[test]
+    fn report_tracks_discovered_scanned_and_ignored_file_counts() {
+        let context = ExecutionContext {
+            action: ProtectedAction::Scan,
+            repo_root: std::env::temp_dir(),
+            discovered_candidate_files: 3,
+            candidate_files: vec![PathBuf::from("README.md")],
+            ignored_candidate_files: vec![
+                PathBuf::from("docs/guide.md"),
+                PathBuf::from("docs/api.md"),
+            ],
+            config: ResolvedConfig {
+                mode: EnforcementMode::Standard,
+                mode_source: ConfigSource::Default,
+                repo_config_path: PathBuf::from(".wolfence/config.toml"),
+                repo_config_exists: true,
+                scan_ignore_paths: vec!["docs/".to_string()],
+            },
+            receipts: ReceiptIndex::default(),
+            push_status: None,
+        };
+
+        let report = Orchestrator::default()
+            .run(&context)
+            .expect("orchestrator should succeed");
+
+        assert_eq!(report.discovered_files, 3);
+        assert_eq!(report.scanned_files, 1);
+        assert_eq!(report.ignored_files, 2);
     }
 }

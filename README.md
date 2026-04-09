@@ -125,6 +125,7 @@ Core docs:
 wolf init\
 wolf push\
 wolf scan\
+wolf scan push\
 wolf doctor\
 wolf config\
 wolf audit list\
@@ -143,7 +144,26 @@ wolf receipt sign <receipt-path> <approver> <key-id> <private-key-path>
 
 ------------------------------------------------------------------------
 
-## Modes
+## 📦 Install
+
+Build and install the local binary:
+
+```bash
+cargo install --path . --force
+```
+
+Then the tool is available directly as:
+
+```bash
+wolf push
+```
+
+During development, `cargo run -- push` still works, but the intended product
+surface is `wolf ...`.
+
+------------------------------------------------------------------------
+
+## 🧪 Modes
 
 Advisory / Standard / Strict
 
@@ -183,7 +203,7 @@ Try the current local prototype end to end with:
 -   dependency scan
 -   git hooks
 
-Current `wolfence push` behavior:
+Current `wolf push` behavior:
 
 - scans the outbound push candidate set, not just staged files
 - if an upstream exists, compares `upstream..HEAD`
@@ -191,8 +211,8 @@ Current `wolfence push` behavior:
 - only runs `git push` after policy evaluation allows the action
 - initial protected pushes prefer `origin`, then fall back to the first configured remote
 - use `WOLFENCE_DRY_RUN=1` to test the decision path without executing the final push
-- `wolfence init` installs a managed `pre-push` hook for native `git push`
-- `wolfence doctor` audits whether local enforcement is actually trustworthy
+- `wolf init` installs a managed `pre-push` hook for native `git push`
+- `wolf doctor` audits whether local enforcement is actually trustworthy
 - repo-local override receipts can suppress specific findings only when they are explicit, unexpired, and integrity-valid
 - protected push decisions are written to a chained local audit log under `.wolfence/audit/`
 - the audit log now distinguishes policy allowance from real `git push` completion and records push transport failures explicitly
@@ -242,3 +262,6 @@ Every push must survive the wolf.
 ## 📜 License
 
 MIT
+`wolf scan` previews the staged set under current policy, and `wolf scan push`
+previews the real outbound push scope. Both return a failing exit code when the
+current policy would block, without invoking `git push`.

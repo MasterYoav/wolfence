@@ -1,4 +1,4 @@
-//! `wolfence doctor`
+//! `wolf doctor`
 //!
 //! A local security gate needs an operator-facing audit path, not just scans.
 //! This command checks whether the repository is configured in a way that makes
@@ -97,6 +97,7 @@ fn build_checks(repo_root: &Path, config: &ResolvedConfig) -> AppResult<Vec<Doct
     checks.push(check_trust_metadata(repo_root)?);
     checks.push(check_receipt_signature_policy(repo_root)?);
     checks.push(check_policy_posture(config));
+    checks.push(check_scan_ignore_paths(config));
     checks.push(check_osv_mode()?);
 
     if let Some(check) = check_environment_override(config) {
@@ -115,7 +116,7 @@ fn build_checks(repo_root: &Path, config: &ResolvedConfig) -> AppResult<Vec<Doct
     checks.push(check_pre_push_hook(repo_root)?);
     checks.push(check_audit_log(repo_root)?);
     checks.push(check_receipt_posture(repo_root)?);
-    checks.push(check_push_window(repo_root)?);
+    checks.push(check_push_window(repo_root, config)?);
 
     Ok(checks)
 }
@@ -225,6 +226,79 @@ fn check_policy_posture(config: &ResolvedConfig) -> DoctorCheck {
         detail,
         remediation,
     }
+}
+
+fn check_scan_ignore_paths(config: &ResolvedConfig) -> DoctorCheck {
+    if config.scan_ignore_paths.is_empty() {
+        return DoctorCheck {
+            name: "scan exclusions",
+            status: DoctorStatus::Info,
+            detail: "no repo-local scan exclusions are configured.".to_string(),
+            remediation: None,
+        };
+    }
+
+    let risky_paths = risky_scan_ignore_paths(&config.scan_ignore_paths);
+    if !risky_paths.is_empty() {
+        return DoctorCheck {
+            name: "scan exclusions",
+            status: DoctorStatus::Warn,
+            detail: format!(
+                "{} repo-local scan exclusion pattern(s) are active, including higher-risk paths: {}",
+                config.scan_ignore_paths.len(),
+                risky_paths.join(", ")
+            ),
+            remediation: Some(
+                "Avoid excluding source, CI, manifest, lockfile, or Wolfence policy paths. Keep exclusions limited to docs, fixtures, or generated artifacts."
+                    .to_string(),
+            ),
+        };
+    }
+
+    DoctorCheck {
+        name: "scan exclusions",
+        status: DoctorStatus::Pass,
+        detail: format!(
+            "{} repo-local scan exclusion pattern(s) are active: {}",
+            config.scan_ignore_paths.len(),
+            config.scan_ignore_paths.join(", ")
+        ),
+        remediation: Some(
+            "Keep exclusions narrowly scoped to docs, fixtures, or generated artifacts so the protected push surface does not silently shrink."
+                .to_string(),
+        ),
+    }
+}
+
+fn risky_scan_ignore_paths(patterns: &[String]) -> Vec<String> {
+    patterns
+        .iter()
+        .filter(|pattern| is_risky_scan_ignore_path(pattern))
+        .cloned()
+        .collect()
+}
+
+fn is_risky_scan_ignore_path(pattern: &str) -> bool {
+    const RISKY_PREFIXES: &[&str] = &["src/", ".github/", ".wolfence/"];
+    const RISKY_EXACT_PATHS: &[&str] = &[
+        "Cargo.toml",
+        "Cargo.lock",
+        "package.json",
+        "package-lock.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "requirements.txt",
+        "requirements-dev.txt",
+        "poetry.lock",
+        "Dockerfile",
+        ".env",
+    ];
+
+    let normalized = pattern.trim();
+    RISKY_PREFIXES
+        .iter()
+        .any(|prefix| normalized == *prefix || normalized.starts_with(prefix))
+        || RISKY_EXACT_PATHS.contains(&normalized)
 }
 
 fn check_receipts_trackability(repo_root: &Path) -> AppResult<DoctorCheck> {
@@ -539,7 +613,7 @@ fn check_dry_run_override() -> Option<DoctorCheck> {
     Some(DoctorCheck {
         name: "dry-run override",
         status: DoctorStatus::Warn,
-        detail: "WOLFENCE_DRY_RUN is enabled, so `wolfence push` will skip the final `git push` side effect.".to_string(),
+        detail: "WOLFENCE_DRY_RUN is enabled, so `wolf push` will skip the final `git push` side effect.".to_string(),
         remediation: Some("Unset `WOLFENCE_DRY_RUN` before validating the full protected push path.".to_string()),
     })
 }
@@ -732,7 +806,7 @@ fn check_pre_push_hook(repo_root: &Path) -> AppResult<DoctorCheck> {
         HookState::Missing => (
             DoctorStatus::Warn,
             format!(
-                "{} is missing, so native `git push` is currently unguarded. Only `wolfence push` enforces policy.",
+                "{} is missing, so native `git push` is currently unguarded. Only `wolf push` enforces policy.",
                 inspection.path.display()
             ),
             Some("Run `cargo run -- init` to install the managed pre-push hook.".to_string()),
@@ -834,7 +908,7 @@ fn check_receipt_posture(repo_root: &Path) -> AppResult<DoctorCheck> {
                     receipts.issues.len()
                 )
             },
-            Some("Review the ignored receipt issues in `wolfence push` or fix the files under `.wolfence/receipts/`.".to_string()),
+            Some("Review the ignored receipt issues in `wolf push` or fix the files under `.wolfence/receipts/`.".to_string()),
         )
     } else if receipts.legacy_active_receipts > 0 {
         (
@@ -890,39 +964,80 @@ fn check_receipt_posture(repo_root: &Path) -> AppResult<DoctorCheck> {
     })
 }
 
-fn check_push_window(repo_root: &Path) -> AppResult<DoctorCheck> {
+fn check_push_window(repo_root: &Path, config: &ResolvedConfig) -> AppResult<DoctorCheck> {
     let push_status = git::push_status(repo_root)?;
-    let detail = match push_status {
-        PushStatus::NoCommits => {
+    Ok(describe_push_window(push_status, config))
+}
+
+fn describe_push_window(push_status: PushStatus, config: &ResolvedConfig) -> DoctorCheck {
+    let (status, detail, remediation) = match push_status {
+        PushStatus::NoCommits => (
+            DoctorStatus::Info,
             "the current branch has no commits yet, so there is no outbound history to protect."
-                .to_string()
-        }
-        PushStatus::UpToDate => {
+                .to_string(),
+            None,
+        ),
+        PushStatus::UpToDate => (
+            DoctorStatus::Info,
             "the current branch is not ahead of its upstream, so a push would currently be a no-op."
-                .to_string()
-        }
+                .to_string(),
+            None,
+        ),
         PushStatus::Ready {
             current_branch,
             upstream_branch,
             commits_ahead,
             candidate_files,
-        } => format!(
-            "branch `{}` is {} commits ahead of {} with {} candidate files in scope.",
-            current_branch,
-            commits_ahead,
-            upstream_branch
-                .as_deref()
-                .unwrap_or("<no upstream: initial push mode>"),
-            candidate_files.len()
-        ),
+        } => {
+            let ignored_files = candidate_files
+                .iter()
+                .filter(|path| config.should_ignore_path(path))
+                .count();
+            let scanned_files = candidate_files.len().saturating_sub(ignored_files);
+
+            if ignored_files > 0 {
+                (
+                    DoctorStatus::Warn,
+                    format!(
+                        "branch `{}` is {} commits ahead of {} with {} outbound candidate files: {} scanned and {} ignored by repo-local exclusions.",
+                        current_branch,
+                        commits_ahead,
+                        upstream_branch
+                            .as_deref()
+                            .unwrap_or("<no upstream: initial push mode>"),
+                        candidate_files.len(),
+                        scanned_files,
+                        ignored_files
+                    ),
+                    Some(
+                        "Review `.wolfence/config.toml` exclusion patterns and confirm the ignored outbound files are limited to low-risk docs, fixtures, or generated artifacts."
+                            .to_string(),
+                    ),
+                )
+            } else {
+                (
+                    DoctorStatus::Info,
+                    format!(
+                        "branch `{}` is {} commits ahead of {} with {} candidate files in scope.",
+                        current_branch,
+                        commits_ahead,
+                        upstream_branch
+                            .as_deref()
+                            .unwrap_or("<no upstream: initial push mode>"),
+                        candidate_files.len()
+                    ),
+                    None,
+                )
+            }
+        }
     };
 
-    Ok(DoctorCheck {
+    DoctorCheck {
         name: "push window",
-        status: DoctorStatus::Info,
+        status,
         detail,
-        remediation: None,
-    })
+        remediation,
+    }
 }
 
 fn summarize_checks(checks: &[DoctorCheck]) -> DoctorSummary {
@@ -949,7 +1064,15 @@ fn dry_run_enabled() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{summarize_checks, DoctorCheck, DoctorStatus};
+    use std::path::Path;
+
+    use super::{
+        check_scan_ignore_paths, describe_push_window, is_risky_scan_ignore_path, summarize_checks,
+        DoctorCheck, DoctorStatus,
+    };
+    use crate::core::config::{ConfigSource, ResolvedConfig};
+    use crate::core::git::PushStatus;
+    use crate::core::policy::EnforcementMode;
 
     #[test]
     fn summarize_counts_each_status_class() {
@@ -985,5 +1108,57 @@ mod tests {
         assert_eq!(summary.warn, 1);
         assert_eq!(summary.fail, 1);
         assert_eq!(summary.info, 1);
+    }
+
+    #[test]
+    fn flags_high_risk_scan_exclusions() {
+        assert!(is_risky_scan_ignore_path("src/"));
+        assert!(is_risky_scan_ignore_path(".github/workflows/"));
+        assert!(is_risky_scan_ignore_path("Cargo.toml"));
+        assert!(!is_risky_scan_ignore_path("docs/"));
+        assert!(!is_risky_scan_ignore_path("fixtures/**"));
+    }
+
+    #[test]
+    fn warns_when_scan_exclusions_cover_core_project_paths() {
+        let config = ResolvedConfig {
+            mode: EnforcementMode::Standard,
+            mode_source: ConfigSource::RepoFile,
+            repo_config_path: Path::new(".wolfence/config.toml").to_path_buf(),
+            repo_config_exists: true,
+            scan_ignore_paths: vec!["docs/".to_string(), "src/".to_string()],
+        };
+
+        let check = check_scan_ignore_paths(&config);
+
+        assert_eq!(check.status, DoctorStatus::Warn);
+        assert!(check.detail.contains("src/"));
+    }
+
+    #[test]
+    fn warns_when_push_window_contains_ignored_outbound_files() {
+        let config = ResolvedConfig {
+            mode: EnforcementMode::Standard,
+            mode_source: ConfigSource::RepoFile,
+            repo_config_path: Path::new(".wolfence/config.toml").to_path_buf(),
+            repo_config_exists: true,
+            scan_ignore_paths: vec!["docs/".to_string()],
+        };
+
+        let check = describe_push_window(
+            PushStatus::Ready {
+                current_branch: "main".to_string(),
+                upstream_branch: Some("origin/main".to_string()),
+                commits_ahead: 2,
+                candidate_files: vec![
+                    Path::new("src/main.rs").to_path_buf(),
+                    Path::new("docs/request.md").to_path_buf(),
+                ],
+            },
+            &config,
+        );
+
+        assert_eq!(check.status, DoctorStatus::Warn);
+        assert!(check.detail.contains("1 scanned and 1 ignored"));
     }
 }

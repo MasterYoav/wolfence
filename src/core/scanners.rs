@@ -91,6 +91,12 @@ impl Scanner for SecretScanner {
                 }
 
                 if let Some(finding) =
+                    scan_registry_auth_credential(self.name(), file, line_number, line)
+                {
+                    record_finding(&mut findings, &mut seen, finding);
+                }
+
+                if let Some(finding) =
                     scan_inline_authorization_credential(self.name(), file, line_number, line)
                 {
                     record_finding(&mut findings, &mut seen, finding);
@@ -104,6 +110,12 @@ impl Scanner for SecretScanner {
 
                 if let Some(finding) =
                     scan_cookie_header_secret(self.name(), file, line_number, line)
+                {
+                    record_finding(&mut findings, &mut seen, finding);
+                }
+
+                if let Some(finding) =
+                    scan_service_webhook_url(self.name(), file, line_number, line)
                 {
                     record_finding(&mut findings, &mut seen, finding);
                 }
@@ -128,6 +140,15 @@ impl Scanner for BasicSastScanner {
             let Some(contents) = read_text_file(&full_path)? else {
                 continue;
             };
+
+            for (line_number, line) in contents.lines().enumerate() {
+                let line_number = line_number + 1;
+                if let Some(finding) =
+                    scan_remote_script_execution(self.name(), file, line_number, line)
+                {
+                    findings.push(finding);
+                }
+            }
 
             for (needle, title, detail, confidence) in [
                 (
@@ -377,24 +398,25 @@ fn scan_github_actions_workflow(
     }
 
     if lower.contains("pull_request_target") {
-        let (severity, confidence, detail, remediation, fingerprint_suffix) =
-            if lower.contains("github.event.pull_request.head") {
-                (
+        let (severity, confidence, detail, remediation, fingerprint_suffix) = if lower
+            .contains("github.event.pull_request.head")
+        {
+            (
                     Severity::High,
                     Confidence::High,
                     "The candidate workflow uses `pull_request_target` and also references pull-request head content, which can create a privileged path for untrusted code or artifacts.",
                     "Avoid checking out or using untrusted pull-request head content in a `pull_request_target` workflow. Split privileged operations into a safer workflow design if needed.",
                     "head-reference",
                 )
-            } else {
-                (
+        } else {
+            (
                     Severity::Medium,
                     Confidence::Medium,
                     "The candidate workflow uses `pull_request_target`, which runs in the base-repository context and needs careful privilege separation.",
                     "Review whether `pull_request_target` is necessary. If the workflow does not need privileged base-repo context, prefer `pull_request` instead.",
                     "trigger",
                 )
-            };
+        };
 
         return Some(Finding::new(
             "config.github-actions.pull-request-target",
@@ -415,6 +437,51 @@ fn scan_github_actions_workflow(
     }
 
     None
+}
+
+fn scan_remote_script_execution(
+    scanner: &'static str,
+    file: &Path,
+    line_number: usize,
+    line: &str,
+) -> Option<Finding> {
+    let lowered = line.to_ascii_lowercase();
+
+    let matches_unix_pattern = (lowered.contains("curl ") || lowered.contains("wget "))
+        && ["| sh", "|sh", "| bash", "|bash", "| zsh", "|zsh"]
+            .iter()
+            .any(|needle| lowered.contains(needle));
+    let matches_powershell_pattern = (lowered.contains("invoke-webrequest")
+        || lowered.contains("irm "))
+        && ["| iex", "|iex", "; iex", ";iex"]
+            .iter()
+            .any(|needle| lowered.contains(needle));
+
+    if !matches_unix_pattern && !matches_powershell_pattern {
+        return None;
+    }
+
+    let severity = if is_execution_surface(file) {
+        Severity::High
+    } else {
+        Severity::Medium
+    };
+
+    Some(
+        Finding::new(
+            "sast.remote-script.execution",
+            scanner,
+            severity,
+            Confidence::High,
+            FindingCategory::Vulnerability,
+            Some(file.to_path_buf()),
+            "Remote script execution pattern detected",
+            "The candidate file appears to download remote content and pipe it directly into an execution surface such as a shell or PowerShell interpreter.",
+            "Pin and verify downloaded artifacts before execution, or replace the pattern with a reviewed package-manager or checksum-verified installation flow.",
+            format!("sast-remote-script:{}:{}", file.display(), line_number),
+        )
+        .with_line(line_number),
+    )
 }
 
 fn scan_kubernetes_secret_manifest(
@@ -691,6 +758,28 @@ fn scan_prefixed_secret_tokens(
             allowed_characters: CharacterClass::UrlSafe,
         },
         PrefixedSecretRule {
+            id: "secret.pattern.gitlab-pat",
+            title: "GitLab personal access token detected",
+            detail: "The candidate file contains a token with a GitLab personal access token prefix.",
+            severity: Severity::High,
+            confidence: Confidence::High,
+            prefix: "glpat-",
+            min_length: 20,
+            max_length: None,
+            allowed_characters: CharacterClass::UrlSafe,
+        },
+        PrefixedSecretRule {
+            id: "secret.pattern.huggingface-token",
+            title: "Hugging Face token detected",
+            detail: "The candidate file contains a token with a Hugging Face secret prefix.",
+            severity: Severity::High,
+            confidence: Confidence::High,
+            prefix: "hf_",
+            min_length: 20,
+            max_length: None,
+            allowed_characters: CharacterClass::UrlSafe,
+        },
+        PrefixedSecretRule {
             id: "secret.pattern.slack-token",
             title: "Slack token detected",
             detail: "The candidate file contains a token with a Slack secret prefix.",
@@ -777,6 +866,17 @@ fn scan_prefixed_secret_tokens(
             min_length: 24,
             max_length: None,
             allowed_characters: CharacterClass::UrlSafe,
+        },
+        PrefixedSecretRule {
+            id: "secret.pattern.sendgrid-key",
+            title: "SendGrid API key detected",
+            detail: "The candidate file contains a token with a SendGrid API key prefix.",
+            severity: Severity::High,
+            confidence: Confidence::High,
+            prefix: "SG.",
+            min_length: 24,
+            max_length: None,
+            allowed_characters: CharacterClass::UrlSafeDots,
         },
     ] {
         for token in extract_prefixed_tokens(
@@ -890,6 +990,10 @@ fn scan_credential_url(
         return None;
     }
 
+    if looks_like_demo_credentials(credentials) {
+        return None;
+    }
+
     Some(
         Finding::new(
             "secret.url.embedded-credentials",
@@ -959,6 +1063,107 @@ fn scan_inline_authorization_credential(
     }
 
     None
+}
+
+fn scan_registry_auth_credential(
+    scanner: &'static str,
+    file: &Path,
+    line_number: usize,
+    line: &str,
+) -> Option<Finding> {
+    let file_name = file
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    match file_name.as_str() {
+        ".npmrc" => {
+            let (key, raw_value) = line.split_once('=')?;
+            let normalized_key = normalize_identifier(key);
+            if !normalized_key.contains("authtoken")
+                && !normalized_key.ends_with("auth")
+                && !normalized_key.ends_with("password")
+            {
+                return None;
+            }
+
+            let token = extract_inline_secret_token(raw_value);
+            if token.len() < 12 || looks_like_placeholder(&token) {
+                return None;
+            }
+
+            Some(
+                Finding::new(
+                    "secret.registry.npmrc-auth",
+                    scanner,
+                    Severity::High,
+                    Confidence::High,
+                    FindingCategory::Secret,
+                    Some(file.to_path_buf()),
+                    "Registry credential detected in .npmrc",
+                    "The candidate `.npmrc` line appears to embed registry authentication material directly in a tracked file.",
+                    "Remove the registry credential from `.npmrc`, rotate it if it is real, and inject it at runtime through a secure user-local or CI secret path.",
+                    format!("secret-npmrc-auth:{}:{}", file.display(), line_number),
+                )
+                .with_line(line_number),
+            )
+        }
+        ".netrc" => {
+            let lowered = line.to_ascii_lowercase();
+            let marker = "password ";
+            let start = lowered.find(marker)?;
+            let token = extract_inline_secret_token(&line[start + marker.len()..]);
+            if token.len() < 8 || looks_like_placeholder(&token) {
+                return None;
+            }
+
+            Some(
+                Finding::new(
+                    "secret.registry.netrc-password",
+                    scanner,
+                    Severity::High,
+                    Confidence::High,
+                    FindingCategory::Secret,
+                    Some(file.to_path_buf()),
+                    "Credential detected in .netrc",
+                    "The candidate `.netrc` line appears to embed a machine password directly in tracked content.",
+                    "Remove the password from `.netrc`, rotate it if it is real, and keep machine credentials out of source control.",
+                    format!("secret-netrc-password:{}:{}", file.display(), line_number),
+                )
+                .with_line(line_number),
+            )
+        }
+        ".pypirc" => {
+            let (key, raw_value) = extract_assignment(line)?;
+            let normalized_key = normalize_identifier(&key);
+            if normalized_key != "password" && !normalized_key.contains("token") {
+                return None;
+            }
+
+            let token = extract_inline_secret_token(raw_value);
+            if token.len() < 8 || looks_like_placeholder(&token) {
+                return None;
+            }
+
+            Some(
+                Finding::new(
+                    "secret.registry.pypirc-password",
+                    scanner,
+                    Severity::High,
+                    Confidence::High,
+                    FindingCategory::Secret,
+                    Some(file.to_path_buf()),
+                    "Credential detected in .pypirc",
+                    "The candidate `.pypirc` line appears to embed package registry credentials directly in tracked content.",
+                    "Remove the credential from `.pypirc`, rotate it if it is real, and inject registry secrets through a secure local or CI path.",
+                    format!("secret-pypirc-password:{}:{}", file.display(), line_number),
+                )
+                .with_line(line_number),
+            )
+        }
+        _ => None,
+    }
 }
 
 fn scan_inline_secret_header(
@@ -1064,6 +1269,68 @@ fn scan_cookie_header_secret(
                     line_number,
                     normalized_name
                 ),
+            )
+            .with_line(line_number),
+        );
+    }
+
+    None
+}
+
+fn scan_service_webhook_url(
+    scanner: &'static str,
+    file: &Path,
+    line_number: usize,
+    line: &str,
+) -> Option<Finding> {
+    for (prefix, min_slashes, id, title, detail) in [
+        (
+            "https://hooks.slack.com/services/",
+            2usize,
+            "secret.webhook.slack",
+            "Slack webhook URL detected",
+            "The candidate file appears to contain a live Slack incoming webhook URL.",
+        ),
+        (
+            "https://discord.com/api/webhooks/",
+            1usize,
+            "secret.webhook.discord",
+            "Discord webhook URL detected",
+            "The candidate file appears to contain a live Discord webhook URL.",
+        ),
+        (
+            "https://discordapp.com/api/webhooks/",
+            1usize,
+            "secret.webhook.discord",
+            "Discord webhook URL detected",
+            "The candidate file appears to contain a live Discord webhook URL.",
+        ),
+    ] {
+        let Some(token) = extract_prefixed_url_token(line, prefix) else {
+            continue;
+        };
+
+        if token.len() <= prefix.len() || looks_like_placeholder(&token) {
+            continue;
+        }
+
+        let suffix = &token[prefix.len()..];
+        if suffix.len() < 16 || suffix.matches('/').count() < min_slashes {
+            continue;
+        }
+
+        return Some(
+            Finding::new(
+                id,
+                scanner,
+                Severity::High,
+                Confidence::High,
+                FindingCategory::Secret,
+                Some(file.to_path_buf()),
+                title,
+                detail,
+                "Remove the webhook from source-controlled content, rotate it if it is real, and inject it through a secure runtime secret path.",
+                format!("secret-webhook:{}:{}:{}", prefix, file.display(), line_number),
             )
             .with_line(line_number),
         );
@@ -2181,6 +2448,10 @@ fn extract_assignment(line: &str) -> Option<(String, &str)> {
         return None;
     }
 
+    if !looks_assignment_key(&key) || !looks_literal_secret_value(value) {
+        return None;
+    }
+
     Some((key, value))
 }
 
@@ -2231,8 +2502,40 @@ fn looks_like_template_expression(value: &str) -> bool {
         || value.contains("}}")
 }
 
+fn looks_assignment_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.' | '"' | '\'')
+        })
+}
+
+fn looks_literal_secret_value(value: &str) -> bool {
+    let normalized = trim_wrapping_quotes(value.trim_matches(',').trim());
+    !normalized.is_empty()
+        && !normalized
+            .chars()
+            .any(|character| character.is_whitespace())
+        && !normalized
+            .chars()
+            .any(|character| matches!(character, '(' | ')' | '{' | '}' | '[' | ']' | ';' | '`'))
+}
+
 fn looks_structured_secret(value: &str) -> bool {
     looks_base64ish(value) || looks_hexish(value) || looks_jwt(value)
+}
+
+fn looks_like_demo_credentials(value: &str) -> bool {
+    let Some((username, password)) = value.split_once(':') else {
+        return false;
+    };
+
+    matches!(
+        username.trim().to_ascii_lowercase().as_str(),
+        "user" | "username" | "example" | "demo"
+    ) && matches!(
+        password.trim().to_ascii_lowercase().as_str(),
+        "password" | "passwd" | "secret" | "token" | "example" | "demo"
+    )
 }
 
 fn looks_base64ish(value: &str) -> bool {
@@ -2319,6 +2622,22 @@ fn extract_prefixed_tokens(
     tokens
 }
 
+fn is_execution_surface(file: &Path) -> bool {
+    let lower = file.to_string_lossy().to_ascii_lowercase();
+    let file_name = file
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    lower.contains(".github/workflows")
+        || file_name == "dockerfile"
+        || lower.ends_with(".sh")
+        || lower.ends_with(".bash")
+        || lower.ends_with(".zsh")
+        || lower.ends_with(".ps1")
+}
+
 fn parse_json_dependency_entry(line: &str) -> Option<(&str, &str)> {
     let trimmed = line.trim().trim_end_matches(',');
     let trimmed = trimmed.strip_prefix('"')?;
@@ -2341,10 +2660,31 @@ fn extract_inline_secret_token(value: &str) -> String {
         .trim_start()
         .trim_matches(|character: char| matches!(character, '"' | '\'' | ':' | ' '))
         .chars()
-        .take_while(|character| {
-            character.is_ascii_alphanumeric() || "-_.+/=:".contains(*character)
-        })
+        .take_while(|character| character.is_ascii_alphanumeric() || "-_.+/=:".contains(*character))
         .collect()
+}
+
+fn extract_prefixed_url_token(line: &str, prefix: &str) -> Option<String> {
+    let start = line.find(prefix)?;
+    let tail = &line[start..];
+    let token = tail
+        .split(|character: char| {
+            character.is_whitespace()
+                || matches!(
+                    character,
+                    '"' | '\'' | ')' | ']' | '}' | '<' | '>' | ',' | ';'
+                )
+        })
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches('/')
+        .to_string();
+
+    if token.is_empty() {
+        return None;
+    }
+
+    Some(token)
 }
 
 fn extract_http_header(line: &str) -> Option<(String, &str)> {
@@ -2390,6 +2730,7 @@ struct PrefixedSecretRule {
 enum CharacterClass {
     UpperAlphaNumeric,
     UrlSafe,
+    UrlSafeDots,
     Slack,
 }
 
@@ -2399,6 +2740,12 @@ impl CharacterClass {
             Self::UpperAlphaNumeric => character.is_ascii_uppercase() || character.is_ascii_digit(),
             Self::UrlSafe => {
                 character.is_ascii_alphanumeric() || character == '_' || character == '-'
+            }
+            Self::UrlSafeDots => {
+                character.is_ascii_alphanumeric()
+                    || character == '_'
+                    || character == '-'
+                    || character == '.'
             }
             Self::Slack => {
                 character.is_ascii_alphanumeric() || character == '-' || character == '_'
@@ -2411,7 +2758,7 @@ impl CharacterClass {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::{ConfigScanner, DependencyScanner, Scanner, SecretScanner};
+    use super::{BasicSastScanner, ConfigScanner, DependencyScanner, Scanner, SecretScanner};
     use crate::core::config::{ConfigSource, ResolvedConfig};
     use crate::core::context::{ExecutionContext, ProtectedAction};
     use crate::core::findings::{Confidence, Severity};
@@ -2511,6 +2858,134 @@ mod tests {
     }
 
     #[test]
+    fn detects_registry_credentials_in_package_auth_files() {
+        let (context, root) = test_context(&[
+            (
+                ".npmrc",
+                "//registry.npmjs.org/:_authToken=npm_1234567890abcdefghijklmnop\n",
+            ),
+            (".netrc", "machine registry.example.com login ci-user password s3cr3tpassw0rdvalue\n"),
+            (".pypirc", "[pypi]\nusername = __token__\npassword = pypi-AgENdGVzdC5weXBpLm9yZwIkfakebutlongtokenvalue\n"),
+        ]);
+
+        let findings = SecretScanner.scan(&context).expect("scan should succeed");
+
+        assert!(findings.iter().any(|finding| {
+            finding
+                .title
+                .contains("Registry credential detected in .npmrc")
+        }));
+        assert!(findings
+            .iter()
+            .any(|finding| finding.title.contains("Credential detected in .netrc")));
+        assert!(findings
+            .iter()
+            .any(|finding| finding.title.contains("Credential detected in .pypirc")));
+        fs::remove_dir_all(root).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
+    fn detects_service_webhook_urls_but_ignores_placeholder_values() {
+        let (context, root) = test_context(&[(
+            "notifications.txt",
+            "Slack: https://hooks.slack.com/services/T12345678/B12345678/abcdefghijklmnopqrstuvwxyz123456\nDiscord: https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ\nPlaceholder: https://hooks.slack.com/services/example/webhook/token_example\n",
+        )]);
+
+        let findings = SecretScanner.scan(&context).expect("scan should succeed");
+
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|finding| finding.title.contains("webhook URL detected"))
+                .count(),
+            2
+        );
+        fs::remove_dir_all(root).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
+    fn detects_remote_script_execution_in_workflow_as_high_severity() {
+        let (context, root) = test_context(&[(
+            ".github/workflows/install.yml",
+            "steps:\n  - run: curl -fsSL https://example.com/install.sh | sh\n",
+        )]);
+
+        let findings = BasicSastScanner
+            .scan(&context)
+            .expect("scan should succeed");
+
+        assert!(findings.iter().any(|finding| {
+            finding.title.contains("Remote script execution pattern")
+                && finding.severity == Severity::High
+                && finding.confidence == Confidence::High
+        }));
+        fs::remove_dir_all(root).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
+    fn detects_remote_script_execution_in_docs_as_medium_severity() {
+        let (context, root) = test_context(&[(
+            "docs/install.md",
+            "Run `curl -fsSL https://example.com/install.sh | sh` to install.\n",
+        )]);
+
+        let findings = BasicSastScanner
+            .scan(&context)
+            .expect("scan should succeed");
+
+        assert!(findings.iter().any(|finding| {
+            finding.title.contains("Remote script execution pattern")
+                && finding.severity == Severity::Medium
+                && finding.confidence == Confidence::High
+        }));
+        fs::remove_dir_all(root).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
+    fn detects_additional_prefixed_service_tokens() {
+        let (context, root) = test_context(&[(
+            "tokens.txt",
+            "gitlab=glpat-1234567890abcdefghijkl\nhf=hf_abcdefghijklmnopqrstuvwxyz123456\nsendgrid=SG.abcdefghijklmnopqrstuvwxyz.1234567890ABCDEFGHIJKLMNOP\nplaceholder=hf_example_token\n",
+        )]);
+
+        let findings = SecretScanner.scan(&context).expect("scan should succeed");
+
+        assert!(findings
+            .iter()
+            .any(|finding| finding.title.contains("GitLab personal access token")));
+        assert!(findings
+            .iter()
+            .any(|finding| finding.title.contains("Hugging Face token")));
+        assert!(findings
+            .iter()
+            .any(|finding| finding.title.contains("SendGrid API key")));
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|finding| finding.title.contains("Hugging Face token"))
+                .count(),
+            1
+        );
+        fs::remove_dir_all(root).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
+    fn ignores_demo_documentation_credentials_and_code_assignments() {
+        let (context, root) = test_context(&[(
+            "docs/examples.md",
+            "Example URL: https://user:password@example.com\nlet private_key_path = require_arg(&mut args, \"private key path\")?;\n",
+        )]);
+
+        let findings = SecretScanner.scan(&context).expect("scan should succeed");
+
+        assert!(
+            findings.is_empty(),
+            "expected no secret findings, got: {findings:#?}"
+        );
+        fs::remove_dir_all(root).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
     fn detects_inline_cookie_session_secrets_but_ignores_benign_cookies() {
         let (context, root) = test_context(&[(
             "requests.http",
@@ -2534,9 +3009,7 @@ mod tests {
         let fake_live_key = ["sk", "live", "1234567890abcdefghijklmno"].join("_");
         let (context, root) = test_context(&[(
             "app/.env.template",
-            &format!(
-                "API_KEY=\"{fake_live_key}\"\nPLACEHOLDER_TOKEN=\"example-token\"\n"
-            ),
+            &format!("API_KEY=\"{fake_live_key}\"\nPLACEHOLDER_TOKEN=\"example-token\"\n"),
         )]);
 
         let findings = SecretScanner.scan(&context).expect("scan should succeed");
@@ -2668,12 +3141,15 @@ mod tests {
         let context = ExecutionContext {
             action: ProtectedAction::Scan,
             repo_root: root.clone(),
+            discovered_candidate_files: candidate_files.len(),
             candidate_files,
+            ignored_candidate_files: Vec::new(),
             config: ResolvedConfig {
                 mode: EnforcementMode::Standard,
                 mode_source: ConfigSource::Default,
                 repo_config_path: root.join(".wolfence/config.toml"),
                 repo_config_exists: false,
+                scan_ignore_paths: Vec::new(),
             },
             receipts: ReceiptIndex::default(),
             push_status: None,

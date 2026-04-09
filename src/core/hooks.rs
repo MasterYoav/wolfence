@@ -154,7 +154,7 @@ fn remove_managed_hook_if_present(
 
 fn hook_script(command: &str) -> String {
     format!(
-        "#!/bin/sh\n# {MANAGED_MARKER}\nset -eu\nREPO_ROOT=\"$(git rev-parse --show-toplevel)\"\ncd \"$REPO_ROOT\"\nexec cargo run --quiet -- {command}\n"
+        "#!/bin/sh\n# {MANAGED_MARKER}\nset -eu\nREPO_ROOT=\"$(git rev-parse --show-toplevel)\"\ncd \"$REPO_ROOT\"\nexec cargo run --quiet --bin wolf -- {command}\n"
     )
 }
 

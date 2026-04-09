@@ -46,7 +46,9 @@ pub struct AuditEvent {
     pub outcome: &'static str,
     pub detail: Option<String>,
     pub verdict: Option<Verdict>,
+    pub discovered_files: usize,
     pub candidate_files: usize,
+    pub ignored_files: usize,
     pub findings: usize,
     pub warnings: usize,
     pub blocks: usize,
@@ -68,7 +70,11 @@ struct AuditRecord {
     outcome: String,
     detail: Option<String>,
     verdict: Option<String>,
+    #[serde(default)]
+    discovered_files: usize,
     candidate_files: usize,
+    #[serde(default)]
+    ignored_files: usize,
     findings: usize,
     warnings: usize,
     blocks: usize,
@@ -101,7 +107,9 @@ pub struct AuditEntry {
     pub outcome: String,
     pub detail: Option<String>,
     pub verdict: Option<String>,
+    pub discovered_files: usize,
     pub candidate_files: usize,
+    pub ignored_files: usize,
     pub findings: usize,
     pub warnings: usize,
     pub blocks: usize,
@@ -125,7 +133,7 @@ pub fn append_audit_event(repo_root: &Path, event: AuditEvent) -> AppResult<Path
         .as_secs();
 
     let base = AuditRecord {
-        version: 2,
+        version: 3,
         sequence: sequence + 1,
         timestamp_unix,
         source: event.source.as_str().to_string(),
@@ -134,7 +142,9 @@ pub fn append_audit_event(repo_root: &Path, event: AuditEvent) -> AppResult<Path
         outcome: event.outcome.to_string(),
         detail: event.detail,
         verdict: event.verdict.map(|value| value.to_string()),
+        discovered_files: event.discovered_files,
         candidate_files: event.candidate_files,
+        ignored_files: event.ignored_files,
         findings: event.findings,
         warnings: event.warnings,
         blocks: event.blocks,
@@ -188,7 +198,9 @@ pub fn read_audit_log(repo_root: &Path) -> AppResult<Vec<AuditEntry>> {
             outcome: record.outcome,
             detail: record.detail,
             verdict: record.verdict,
+            discovered_files: record.discovered_files,
             candidate_files: record.candidate_files,
+            ignored_files: record.ignored_files,
             findings: record.findings,
             warnings: record.warnings,
             blocks: record.blocks,
@@ -313,7 +325,6 @@ fn canonical_record_payload(record: &AuditRecord, include_detail: bool) -> AppRe
         "status": record.status,
         "outcome": record.outcome,
         "verdict": record.verdict,
-        "candidate_files": record.candidate_files,
         "findings": record.findings,
         "warnings": record.warnings,
         "blocks": record.blocks,
@@ -324,6 +335,14 @@ fn canonical_record_payload(record: &AuditRecord, include_detail: bool) -> AppRe
         "commits_ahead": record.commits_ahead,
         "prev_hash": record.prev_hash,
     });
+
+    if record.version >= 3 {
+        payload["discovered_files"] = serde_json::json!(record.discovered_files);
+        payload["candidate_files"] = serde_json::json!(record.candidate_files);
+        payload["ignored_files"] = serde_json::json!(record.ignored_files);
+    } else {
+        payload["candidate_files"] = serde_json::json!(record.candidate_files);
+    }
 
     if include_detail {
         payload["detail"] = serde_json::to_value(&record.detail).map_err(|error| {
@@ -375,7 +394,9 @@ mod tests {
                 outcome: "policy-allowed",
                 detail: None,
                 verdict: Some(Verdict::Allow),
+                discovered_files: 5,
                 candidate_files: 3,
+                ignored_files: 2,
                 findings: 1,
                 warnings: 1,
                 blocks: 0,
@@ -397,7 +418,9 @@ mod tests {
                 outcome: "blocked",
                 detail: None,
                 verdict: Some(Verdict::Block),
+                discovered_files: 2,
                 candidate_files: 2,
+                ignored_files: 0,
                 findings: 2,
                 warnings: 0,
                 blocks: 1,
@@ -417,6 +440,8 @@ mod tests {
         let entries = read_audit_log(&root).expect("audit log should be readable");
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].outcome, "policy-allowed");
+        assert_eq!(entries[0].discovered_files, 5);
+        assert_eq!(entries[0].ignored_files, 2);
         assert_eq!(entries[1].outcome, "blocked");
     }
 

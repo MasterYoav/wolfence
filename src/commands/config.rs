@@ -124,6 +124,14 @@ pub fn run() -> AppResult<ExitCode> {
     println!("  audit entries: {}", audit.entries);
     println!("  audit healthy: {}", audit.healthy);
     println!("  live OSV advisory mode: {}", osv_mode);
+    println!(
+        "  scan ignore paths: {}",
+        if config.scan_ignore_paths.is_empty() {
+            "none".to_string()
+        } else {
+            config.scan_ignore_paths.join(", ")
+        }
+    );
     println!("  effective mode: {} ({})", config.mode, config.mode_source);
     println!("  precedence: WOLFENCE_MODE -> repo config -> built-in default");
     println!("  advisory source precedence: WOLFENCE_OSV -> built-in default (`auto`)");

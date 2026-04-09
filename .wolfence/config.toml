@@ -11,3 +11,10 @@
 # - "standard": block high/critical findings
 # - "strict": block medium/high/critical findings
 mode = "standard"
+
+[scan]
+
+# Repository-relative paths or path prefixes to exclude from scanning.
+# Keep this narrow. It is meant for documentation examples, fixtures, or
+# generated artifacts that are not part of the real protected code path.
+ignore_paths = ["docs/"]

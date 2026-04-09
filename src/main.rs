@@ -17,7 +17,7 @@ fn main() -> ExitCode {
     match app::run() {
         Ok(code) => code,
         Err(error) => {
-            eprintln!("wolfence: {error}");
+            eprintln!("wolf: {error}");
             ExitCode::FAILURE
         }
     }

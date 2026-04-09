@@ -72,8 +72,8 @@ Expected result:
 These are not just hand-written examples. The current test suite exercises the
 same protected-decision paths directly:
 
-- `wolfence push` dry-run allows a harmless initial commit
-- `wolfence push` dry-run blocks a risky `.env` initial commit
+- `wolf push` dry-run allows a harmless initial commit
+- `wolf push` dry-run blocks a risky `.env` initial commit
 - the managed `pre-push` hook allows a harmless initial commit
 - the managed `pre-push` hook blocks a risky `.env` initial commit
 
@@ -93,7 +93,7 @@ If you skip step 1, Wolfence now fails cleanly after policy evaluation and
 records that outcome in the audit chain as a push transport failure instead of
 pretending the push completed.
 
-For native Git behavior through hooks instead of explicit `wolfence push`,
+For native Git behavior through hooks instead of explicit `wolf push`,
 continue with:
 
 ```bash
