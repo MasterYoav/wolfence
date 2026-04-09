@@ -1,14 +1,10 @@
 ![Wolfence banner](Media/banner.png)
 
 
-> **Don't just push code. Prove it's safe.**
-
 Wolfence is a **security-first Git interface** that prevents unsafe code
 from ever leaving a developer's machine.
 
 ------------------------------------------------------------------------
-
-## 🚀 Vision
 
 Modern developers move fast --- sometimes too fast.
 
@@ -19,14 +15,7 @@ misconfigurations often slip into repositories unnoticed.
 
 > Wolfence stands between your code and the world --- and decides if
 > it's safe to pass.
-
-------------------------------------------------------------------------
-
-## 🧠 What is Wolfence?
-
-Wolfence is a **developer-first security gate for Git pushes**.
-
-It does not try to replace your whole Git workflow.
+> It does not try to replace your whole Git workflow.
 
 You write code normally.\
 You commit normally.\
@@ -44,7 +33,7 @@ Before any code is pushed, Wolfence:
 
 ------------------------------------------------------------------------
 
-## 🔥 Core Concept
+## Core Concept
 
 Traditional flow:
 
@@ -56,31 +45,31 @@ wolf push → scan → (block OR allow) → push
 
 ------------------------------------------------------------------------
 
-## 🛡️ Protection Layers
+## Protection Layers
 
-### 🔐 Secrets
+### Secrets
 
 API keys, tokens, private keys, .env leaks
 
-### 🧨 Vulnerabilities
+### Vulnerabilities
 
 SQLi, XSS, SSRF, injections, unsafe eval
 
-### 📦 Dependencies
+### Dependencies
 
 CVEs, outdated libs, malicious packages
 
-### ⚙️ Config
+### Config
 
 Docker, CI/CD, Terraform, permissions
 
-### 📜 Policies
+### Policies
 
 Custom org rules
 
 ------------------------------------------------------------------------
 
-## ⚡ Features
+## Features
 
 -   Fast (scan only changed code)
 -   Blocks unsafe pushes
@@ -90,22 +79,13 @@ Custom org rules
 
 ------------------------------------------------------------------------
 
-## 🧪 Example
-
-\$ wolf push
-
-❌ Push blocked\
-Command Injection detected
-
-------------------------------------------------------------------------
-
-## 🧩 Architecture
+## Architecture
 
 CLI → Orchestrator → Scanners → Policy → Decision → Git
 
 ------------------------------------------------------------------------
 
-## 🦀 Implementation Direction
+## Implementation Direction
 
 Wolfence is now being implemented in **Rust** as a **local-first modular
 monolith**.
@@ -136,7 +116,7 @@ Core docs:
 
 ------------------------------------------------------------------------
 
-## 🧰 Commands
+## Commands
 
 wolf init\
 wolf push\
@@ -159,13 +139,13 @@ wolf receipt sign <receipt-path> <approver> <key-id> <private-key-path>
 
 ------------------------------------------------------------------------
 
-## 🧪 Modes
+## Modes
 
 Advisory / Standard / Strict
 
 ------------------------------------------------------------------------
 
-## ⚙️ Configuration
+## Configuration
 
 Wolfence now uses a repo-local config file at:
 
@@ -191,7 +171,7 @@ Try the current local prototype end to end with:
 
 ------------------------------------------------------------------------
 
-## 🚧 MVP
+## MVP
 
 -   wolf push
 -   secret scanning
@@ -240,7 +220,7 @@ Current policy strengths:
 
 ------------------------------------------------------------------------
 
-## 🔮 Roadmap
+## Roadmap
 
 -   Cloud dashboard\
 -   AI analysis\
@@ -249,7 +229,7 @@ Current policy strengths:
 
 ------------------------------------------------------------------------
 
-## 🐺 Philosophy
+## Philosophy
 
 Every push must survive the wolf.
 
