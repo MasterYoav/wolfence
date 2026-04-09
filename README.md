@@ -1,6 +1,5 @@
 ![Wolfence banner](Media/banner.png)
 
-# 🐺 Wolfence
 
 > **Don't just push code. Prove it's safe.**
 
