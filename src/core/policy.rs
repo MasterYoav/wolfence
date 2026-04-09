@@ -7,13 +7,16 @@
 
 use std::fmt::{self, Display, Formatter};
 
+use serde::Serialize;
+
 use super::context::ProtectedAction;
 use super::findings::{Confidence, Finding, FindingCategory, Severity};
 use super::orchestrator::ScanReport;
 use super::receipts::{OverrideReceipt, ReceiptIndex};
 
 /// High-level enforcement presets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum EnforcementMode {
     Advisory,
     Standard,
@@ -43,7 +46,8 @@ impl EnforcementMode {
 }
 
 /// Final outcome returned to the caller.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Verdict {
     Allow,
     Warn,
@@ -61,7 +65,7 @@ impl Display for Verdict {
 }
 
 /// Explanation bundle emitted alongside a verdict.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PolicyDecision {
     pub verdict: Verdict,
     pub blocking_findings: Vec<PolicyFinding>,
@@ -70,14 +74,14 @@ pub struct PolicyDecision {
 }
 
 /// One finding plus the policy rationale behind its classification.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PolicyFinding {
     pub finding: Finding,
     pub rationale: &'static str,
 }
 
 /// One finding that was suppressed by an active override receipt.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct OverriddenFinding {
     pub finding: Finding,
     pub receipt: OverrideReceipt,

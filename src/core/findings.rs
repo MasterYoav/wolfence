@@ -9,8 +9,11 @@ use std::fmt::{self, Display, Formatter};
 use std::hash::Hash;
 use std::path::PathBuf;
 
+use serde::Serialize;
+
 /// Coarse severity scale used by early policy decisions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Severity {
     Info,
     Low,
@@ -32,7 +35,8 @@ impl Display for Severity {
 }
 
 /// Confidence lets policy distinguish between heuristic noise and hard proof.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Confidence {
     Low,
     Medium,
@@ -50,7 +54,8 @@ impl Display for Confidence {
 }
 
 /// High-level problem category.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum FindingCategory {
     Secret,
     Vulnerability,
@@ -86,7 +91,7 @@ impl FindingCategory {
 }
 
 /// Canonical finding emitted by a scanner.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Finding {
     pub id: String,
     pub scanner: &'static str,

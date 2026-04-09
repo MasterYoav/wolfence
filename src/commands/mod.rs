@@ -10,6 +10,7 @@ mod config;
 mod doctor;
 mod hook_pre_push;
 mod init;
+mod json;
 mod protected;
 mod push;
 mod receipt;
@@ -25,10 +26,10 @@ use crate::cli::Command;
 pub fn execute(command: Command) -> AppResult<ExitCode> {
     match command {
         Command::Init => init::run(),
-        Command::Push => push::run(),
+        Command::Push { json } => push::run(json),
         Command::HookPrePush => hook_pre_push::run(),
         Command::Scan(command) => scan::run(command),
-        Command::Doctor => doctor::run(),
+        Command::Doctor { json } => doctor::run(json),
         Command::Config => config::run(),
         Command::Receipt(command) => receipt::run(command),
         Command::Trust(command) => trust::run(command),
@@ -53,10 +54,12 @@ fn print_help() {
     println!();
     println!("Commands:");
     println!("  init     Initialize repo-local Wolfence configuration");
-    println!("  push     Run scans and evaluate whether a push should be allowed");
+    println!(
+        "  push     Run scans and evaluate whether a push should be allowed (`--json` supported)"
+    );
     println!("  hook-pre-push    Internal Git hook entrypoint for push enforcement");
-    println!("  scan     Run the local scan pipeline without taking Git side effects");
-    println!("  doctor   Inspect local prerequisites and repository state");
+    println!("  scan     Run the local scan pipeline without taking Git side effects (`--json` supported)");
+    println!("  doctor   Inspect local prerequisites and repository state (`--json` supported)");
     println!("  config   Explain configuration surfaces and intended ownership");
     println!(
         "  receipt  List, create, verify, archive, checksum, and sign reviewable override receipts"
@@ -95,13 +98,13 @@ fn print_trust_help_summary() {
 
 fn print_audit_help_summary() {
     println!("Audit Commands:");
-    println!("  audit list");
-    println!("  audit verify");
+    println!("  audit list [--json]");
+    println!("  audit verify [--json]");
 }
 
 fn print_scan_help_summary() {
     println!("Scan Commands:");
-    println!("  scan");
-    println!("  scan staged");
-    println!("  scan push");
+    println!("  scan [--json]");
+    println!("  scan staged [--json]");
+    println!("  scan push [--json]");
 }

@@ -118,9 +118,9 @@ Wolfence fails closed in all of those cases.
 Wolfence exposes this policy through:
 
 - `cargo run -- init`
-- `cargo run -- config`
-- `cargo run -- doctor`
-- `cargo run -- receipt verify <receipt-path>`
+- `wolf config`
+- `wolf doctor`
+- `wolf receipt verify <receipt-path>`
 
 Those commands should make it obvious whether governance rules exist and
 whether receipts are being rejected because of them.

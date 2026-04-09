@@ -11,21 +11,59 @@
 
 use std::process::ExitCode;
 
+use serde::Serialize;
+
 use crate::app::AppResult;
 use crate::core::audit::{self, AuditEvent, AuditSource};
 use crate::core::git;
 use crate::core::policy::Verdict;
 
+use super::json::{path_strings, print_json, print_json_error};
 use super::protected::{self, PushEvaluation};
 
-pub fn run() -> AppResult<ExitCode> {
+pub fn run(json: bool) -> AppResult<ExitCode> {
+    let result = run_internal(json);
+    if json {
+        if let Err(error) = &result {
+            print_json_error("push", error)?;
+            return Ok(ExitCode::FAILURE);
+        }
+    }
+    result
+}
+
+#[derive(Serialize)]
+struct JsonPushScope {
+    discovered_files: usize,
+    scanned_files: usize,
+    ignored_files: usize,
+    scanned_paths: Vec<String>,
+    ignored_paths: Vec<String>,
+    ignore_patterns: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct JsonPushResponse {
+    command: &'static str,
+    action: &'static str,
+    repo_root: String,
+    mode: Option<String>,
+    mode_source: Option<String>,
+    status: &'static str,
+    branch: Option<String>,
+    upstream: Option<String>,
+    commits_ahead: Option<usize>,
+    report: Option<crate::core::orchestrator::ScanReport>,
+    decision: Option<crate::core::policy::PolicyDecision>,
+    scan_scope: Option<JsonPushScope>,
+    receipt_issues: Vec<crate::core::receipts::ReceiptIssue>,
+    outcome: &'static str,
+    git_error: Option<String>,
+}
+
+fn run_internal(json: bool) -> AppResult<ExitCode> {
     match protected::evaluate_push_action()? {
         PushEvaluation::NoCommits { context } => {
-            println!("Wolfence push");
-            println!("  action: {}", context.action);
-            println!("  repo root: {}", context.repo_root.display());
-            println!("  status: no commits exist on the current branch");
-            println!("  result: nothing to push");
             audit::append_audit_event(
                 &context.repo_root,
                 AuditEvent {
@@ -48,14 +86,34 @@ pub fn run() -> AppResult<ExitCode> {
                     commits_ahead: None,
                 },
             )?;
-            Ok(ExitCode::FAILURE)
-        }
-        PushEvaluation::UpToDate { context } => {
+            if json {
+                print_json(&JsonPushResponse {
+                    command: "push",
+                    action: "push",
+                    repo_root: context.repo_root.display().to_string(),
+                    mode: None,
+                    mode_source: None,
+                    status: "no-commits",
+                    branch: None,
+                    upstream: None,
+                    commits_ahead: None,
+                    report: None,
+                    decision: None,
+                    scan_scope: None,
+                    receipt_issues: context.receipts.issues.clone(),
+                    outcome: "no-op",
+                    git_error: None,
+                })?;
+                return Ok(ExitCode::FAILURE);
+            }
             println!("Wolfence push");
             println!("  action: {}", context.action);
             println!("  repo root: {}", context.repo_root.display());
-            println!("  status: branch is not ahead of its upstream");
+            println!("  status: no commits exist on the current branch");
             println!("  result: nothing to push");
+            Ok(ExitCode::FAILURE)
+        }
+        PushEvaluation::UpToDate { context } => {
             audit::append_audit_event(
                 &context.repo_root,
                 AuditEvent {
@@ -78,6 +136,31 @@ pub fn run() -> AppResult<ExitCode> {
                     commits_ahead: Some(0),
                 },
             )?;
+            if json {
+                print_json(&JsonPushResponse {
+                    command: "push",
+                    action: "push",
+                    repo_root: context.repo_root.display().to_string(),
+                    mode: None,
+                    mode_source: None,
+                    status: "up-to-date",
+                    branch: None,
+                    upstream: None,
+                    commits_ahead: Some(0),
+                    report: None,
+                    decision: None,
+                    scan_scope: None,
+                    receipt_issues: context.receipts.issues.clone(),
+                    outcome: "no-op",
+                    git_error: None,
+                })?;
+                return Ok(ExitCode::SUCCESS);
+            }
+            println!("Wolfence push");
+            println!("  action: {}", context.action);
+            println!("  repo root: {}", context.repo_root.display());
+            println!("  status: branch is not ahead of its upstream");
+            println!("  result: nothing to push");
             Ok(ExitCode::SUCCESS)
         }
         PushEvaluation::Ready {
@@ -88,6 +171,182 @@ pub fn run() -> AppResult<ExitCode> {
             upstream_branch,
             commits_ahead,
         } => {
+            let scan_scope = JsonPushScope {
+                discovered_files: report.discovered_files,
+                scanned_files: report.scanned_files,
+                ignored_files: report.ignored_files,
+                scanned_paths: path_strings(&context.candidate_files),
+                ignored_paths: path_strings(&context.ignored_candidate_files),
+                ignore_patterns: context.config.scan_ignore_paths.clone(),
+            };
+
+            let outcome = match decision.verdict {
+                Verdict::Allow | Verdict::Warn if dry_run_enabled() => "allowed-dry-run",
+                Verdict::Allow | Verdict::Warn => "policy-allowed",
+                Verdict::Block => "blocked",
+            };
+
+            audit::append_audit_event(
+                &context.repo_root,
+                AuditEvent {
+                    source: AuditSource::PushCommand,
+                    action: context.action,
+                    status: "ready",
+                    outcome,
+                    detail: None,
+                    verdict: Some(decision.verdict),
+                    discovered_files: report.discovered_files,
+                    candidate_files: report.scanned_files,
+                    ignored_files: report.ignored_files,
+                    findings: report.findings.len(),
+                    warnings: decision.warning_findings.len(),
+                    blocks: decision.blocking_findings.len(),
+                    overrides_applied: decision.overridden_findings.len(),
+                    receipt_issues: context.receipts.issues.len(),
+                    branch: Some(current_branch.clone()),
+                    upstream: upstream_branch.clone(),
+                    commits_ahead: Some(commits_ahead),
+                },
+            )?;
+
+            if json {
+                match decision.verdict {
+                    Verdict::Block => {
+                        print_json(&JsonPushResponse {
+                            command: "push",
+                            action: "push",
+                            repo_root: context.repo_root.display().to_string(),
+                            mode: Some(context.config.mode.to_string()),
+                            mode_source: Some(context.config.mode_source.to_string()),
+                            status: "ready",
+                            branch: Some(current_branch),
+                            upstream: upstream_branch,
+                            commits_ahead: Some(commits_ahead),
+                            report: Some(report),
+                            decision: Some(decision),
+                            scan_scope: Some(scan_scope),
+                            receipt_issues: context.receipts.issues.clone(),
+                            outcome,
+                            git_error: None,
+                        })?;
+                        return Ok(ExitCode::FAILURE);
+                    }
+                    Verdict::Allow | Verdict::Warn if dry_run_enabled() => {
+                        print_json(&JsonPushResponse {
+                            command: "push",
+                            action: "push",
+                            repo_root: context.repo_root.display().to_string(),
+                            mode: Some(context.config.mode.to_string()),
+                            mode_source: Some(context.config.mode_source.to_string()),
+                            status: "ready",
+                            branch: Some(current_branch),
+                            upstream: upstream_branch,
+                            commits_ahead: Some(commits_ahead),
+                            report: Some(report),
+                            decision: Some(decision),
+                            scan_scope: Some(scan_scope),
+                            receipt_issues: context.receipts.issues.clone(),
+                            outcome,
+                            git_error: None,
+                        })?;
+                        return Ok(ExitCode::SUCCESS);
+                    }
+                    Verdict::Allow | Verdict::Warn => {
+                        match git::push(
+                            &context.repo_root,
+                            &current_branch,
+                            upstream_branch.as_deref(),
+                        ) {
+                            Ok(()) => {
+                                audit::append_audit_event(
+                                    &context.repo_root,
+                                    AuditEvent {
+                                        source: AuditSource::PushCommand,
+                                        action: context.action,
+                                        status: "completed",
+                                        outcome: "push-completed",
+                                        detail: None,
+                                        verdict: Some(decision.verdict),
+                                        discovered_files: report.discovered_files,
+                                        candidate_files: report.scanned_files,
+                                        ignored_files: report.ignored_files,
+                                        findings: report.findings.len(),
+                                        warnings: decision.warning_findings.len(),
+                                        blocks: decision.blocking_findings.len(),
+                                        overrides_applied: decision.overridden_findings.len(),
+                                        receipt_issues: context.receipts.issues.len(),
+                                        branch: Some(current_branch.clone()),
+                                        upstream: upstream_branch.clone(),
+                                        commits_ahead: Some(commits_ahead),
+                                    },
+                                )?;
+                                print_json(&JsonPushResponse {
+                                    command: "push",
+                                    action: "push",
+                                    repo_root: context.repo_root.display().to_string(),
+                                    mode: Some(context.config.mode.to_string()),
+                                    mode_source: Some(context.config.mode_source.to_string()),
+                                    status: "completed",
+                                    branch: Some(current_branch),
+                                    upstream: upstream_branch,
+                                    commits_ahead: Some(commits_ahead),
+                                    report: Some(report),
+                                    decision: Some(decision),
+                                    scan_scope: Some(scan_scope),
+                                    receipt_issues: context.receipts.issues.clone(),
+                                    outcome: "push-completed",
+                                    git_error: None,
+                                })?;
+                                return Ok(ExitCode::SUCCESS);
+                            }
+                            Err(error) => {
+                                let detail = error.to_string();
+                                audit::append_audit_event(
+                                    &context.repo_root,
+                                    AuditEvent {
+                                        source: AuditSource::PushCommand,
+                                        action: context.action,
+                                        status: "ready",
+                                        outcome: "push-failed",
+                                        detail: Some(detail.clone()),
+                                        verdict: Some(decision.verdict),
+                                        discovered_files: report.discovered_files,
+                                        candidate_files: report.scanned_files,
+                                        ignored_files: report.ignored_files,
+                                        findings: report.findings.len(),
+                                        warnings: decision.warning_findings.len(),
+                                        blocks: decision.blocking_findings.len(),
+                                        overrides_applied: decision.overridden_findings.len(),
+                                        receipt_issues: context.receipts.issues.len(),
+                                        branch: Some(current_branch.clone()),
+                                        upstream: upstream_branch.clone(),
+                                        commits_ahead: Some(commits_ahead),
+                                    },
+                                )?;
+                                print_json(&JsonPushResponse {
+                                    command: "push",
+                                    action: "push",
+                                    repo_root: context.repo_root.display().to_string(),
+                                    mode: Some(context.config.mode.to_string()),
+                                    mode_source: Some(context.config.mode_source.to_string()),
+                                    status: "ready",
+                                    branch: Some(current_branch),
+                                    upstream: upstream_branch,
+                                    commits_ahead: Some(commits_ahead),
+                                    report: Some(report),
+                                    decision: Some(decision),
+                                    scan_scope: Some(scan_scope),
+                                    receipt_issues: context.receipts.issues.clone(),
+                                    outcome: "push-failed",
+                                    git_error: Some(detail),
+                                })?;
+                                return Ok(ExitCode::FAILURE);
+                            }
+                        }
+                    }
+                }
+            }
+
             println!("Wolfence push");
             println!("  action: {}", context.action);
             println!("  repo root: {}", context.repo_root.display());
@@ -117,37 +376,8 @@ pub fn run() -> AppResult<ExitCode> {
             protected::print_receipt_issues(&context.receipts.issues);
             protected::print_decision_findings(&decision);
 
-            let outcome = match decision.verdict {
-                Verdict::Allow | Verdict::Warn if dry_run_enabled() => "allowed-dry-run",
-                Verdict::Allow | Verdict::Warn => "policy-allowed",
-                Verdict::Block => "blocked",
-            };
-
             match decision.verdict {
                 Verdict::Allow | Verdict::Warn => {
-                    audit::append_audit_event(
-                        &context.repo_root,
-                        AuditEvent {
-                            source: AuditSource::PushCommand,
-                            action: context.action,
-                            status: "ready",
-                            outcome,
-                            detail: None,
-                            verdict: Some(decision.verdict),
-                            discovered_files: report.discovered_files,
-                            candidate_files: report.scanned_files,
-                            ignored_files: report.ignored_files,
-                            findings: report.findings.len(),
-                            warnings: decision.warning_findings.len(),
-                            blocks: decision.blocking_findings.len(),
-                            overrides_applied: decision.overridden_findings.len(),
-                            receipt_issues: context.receipts.issues.len(),
-                            branch: Some(current_branch.clone()),
-                            upstream: upstream_branch.clone(),
-                            commits_ahead: Some(commits_ahead),
-                        },
-                    )?;
-
                     if dry_run_enabled() {
                         println!("  result: policy allowed the push, but git push was skipped because WOLFENCE_DRY_RUN=1");
                         return Ok(ExitCode::SUCCESS);
@@ -215,28 +445,6 @@ pub fn run() -> AppResult<ExitCode> {
                     }
                 }
                 Verdict::Block => {
-                    audit::append_audit_event(
-                        &context.repo_root,
-                        AuditEvent {
-                            source: AuditSource::PushCommand,
-                            action: context.action,
-                            status: "ready",
-                            outcome,
-                            detail: None,
-                            verdict: Some(decision.verdict),
-                            discovered_files: report.discovered_files,
-                            candidate_files: report.scanned_files,
-                            ignored_files: report.ignored_files,
-                            findings: report.findings.len(),
-                            warnings: decision.warning_findings.len(),
-                            blocks: decision.blocking_findings.len(),
-                            overrides_applied: decision.overridden_findings.len(),
-                            receipt_issues: context.receipts.issues.len(),
-                            branch: Some(current_branch.clone()),
-                            upstream: upstream_branch.clone(),
-                            commits_ahead: Some(commits_ahead),
-                        },
-                    )?;
                     println!("  push blocked by current policy");
                     Ok(ExitCode::FAILURE)
                 }
@@ -281,7 +489,7 @@ mod tests {
         env::set_current_dir(&repo_root).expect("should enter repo");
         env::set_var("WOLFENCE_DRY_RUN", "1");
 
-        let result = run().expect("push command should run");
+        let result = run(false).expect("push command should run");
 
         restore_process_state(&previous_dir, previous_dry_run);
         assert_eq!(result, std::process::ExitCode::FAILURE);
@@ -304,7 +512,7 @@ mod tests {
         env::set_current_dir(&repo_root).expect("should enter repo");
         env::set_var("WOLFENCE_DRY_RUN", "1");
 
-        let result = run().expect("push command should run");
+        let result = run(false).expect("push command should run");
 
         restore_process_state(&previous_dir, previous_dry_run);
         assert_eq!(result, std::process::ExitCode::SUCCESS);
@@ -332,7 +540,7 @@ mod tests {
         env::set_current_dir(&repo_root).expect("should enter repo");
         env::set_var("WOLFENCE_DRY_RUN", "1");
 
-        let result = run().expect("push command should run");
+        let result = run(false).expect("push command should run");
 
         restore_process_state(&previous_dir, previous_dry_run);
         assert_eq!(result, std::process::ExitCode::SUCCESS);
@@ -355,7 +563,7 @@ mod tests {
         env::set_current_dir(&repo_root).expect("should enter repo");
         env::remove_var("WOLFENCE_DRY_RUN");
 
-        let result = run().expect("push command should handle git failure gracefully");
+        let result = run(false).expect("push command should handle git failure gracefully");
 
         restore_process_state(&previous_dir, previous_dry_run);
         assert_eq!(result, std::process::ExitCode::FAILURE);

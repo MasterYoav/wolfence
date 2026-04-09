@@ -7,6 +7,8 @@
 use std::fmt::{self, Display, Formatter};
 use std::path::PathBuf;
 
+use serde::Serialize;
+
 use crate::app::AppResult;
 
 use super::config::ResolvedConfig;
@@ -15,7 +17,8 @@ use super::git::PushStatus;
 use super::receipts::ReceiptIndex;
 
 /// The user-intent we are protecting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ProtectedAction {
     Push,
     Scan,

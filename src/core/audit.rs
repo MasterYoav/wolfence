@@ -88,7 +88,7 @@ struct AuditRecord {
 }
 
 /// Verification result for the local audit log.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct AuditVerification {
     pub log_path: PathBuf,
     pub entries: usize,
@@ -97,7 +97,7 @@ pub struct AuditVerification {
 }
 
 /// Public audit entry shape for operator inspection.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct AuditEntry {
     pub sequence: usize,
     pub timestamp_unix: u64,

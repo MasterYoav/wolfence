@@ -6,29 +6,125 @@
 
 use std::process::ExitCode;
 
+use serde::Serialize;
+
 use crate::app::AppResult;
 use crate::cli::ScanCommand;
 use crate::core::context::{ExecutionContext, ProtectedAction};
 use crate::core::orchestrator::{Orchestrator, ScanReport};
-use crate::core::policy::Verdict;
+use crate::core::policy::{PolicyDecision, Verdict};
 
+use super::json::{path_strings, print_json, print_json_error};
 use super::protected::{self, PushEvaluation};
 
 pub fn run(command: ScanCommand) -> AppResult<ExitCode> {
-    match command {
-        ScanCommand::Staged => run_staged_scan(),
-        ScanCommand::Push => run_push_scan(),
+    let json = match &command {
+        ScanCommand::Staged { json } | ScanCommand::Push { json } => *json,
+        ScanCommand::Help => false,
+    };
+
+    let result = match command {
+        ScanCommand::Staged { json } => run_staged_scan(json),
+        ScanCommand::Push { json } => run_push_scan(json),
         ScanCommand::Help => {
             print_help();
             Ok(ExitCode::SUCCESS)
         }
+    };
+
+    if json {
+        if let Err(error) = &result {
+            print_json_error("scan", error)?;
+            return Ok(ExitCode::FAILURE);
+        }
     }
+
+    result
 }
 
-fn run_staged_scan() -> AppResult<ExitCode> {
+#[derive(Serialize)]
+struct JsonScanScope {
+    discovered_files: usize,
+    scanned_files: usize,
+    ignored_files: usize,
+    scanned_paths: Vec<String>,
+    ignored_paths: Vec<String>,
+    ignore_patterns: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct JsonReceiptState {
+    issues: Vec<crate::core::receipts::ReceiptIssue>,
+    issue_count: usize,
+    overrides_applied: usize,
+}
+
+#[derive(Serialize)]
+struct JsonScanResponse {
+    command: &'static str,
+    scope: &'static str,
+    action: String,
+    repo_root: String,
+    mode: Option<String>,
+    mode_source: Option<String>,
+    status: &'static str,
+    branch: Option<String>,
+    upstream: Option<String>,
+    commits_ahead: Option<usize>,
+    scanners_run: usize,
+    report: Option<ScanReport>,
+    decision: Option<PolicyDecision>,
+    receipts: JsonReceiptState,
+    scan_scope: Option<JsonScanScope>,
+    result: &'static str,
+}
+
+fn run_staged_scan(json: bool) -> AppResult<ExitCode> {
     let context = ExecutionContext::load(ProtectedAction::Scan)?;
     let report = Orchestrator::default().run(&context)?;
     let decision = report.evaluate(context.config.mode, &context.receipts, context.action);
+
+    if json {
+        let response = JsonScanResponse {
+            command: "scan",
+            scope: "staged",
+            action: context.action.to_string(),
+            repo_root: context.repo_root.display().to_string(),
+            mode: Some(context.config.mode.to_string()),
+            mode_source: Some(context.config.mode_source.to_string()),
+            status: "ready",
+            branch: None,
+            upstream: None,
+            commits_ahead: None,
+            scanners_run: report.scanners_run,
+            report: Some(report.clone()),
+            decision: Some(decision.clone()),
+            receipts: JsonReceiptState {
+                issues: context.receipts.issues.clone(),
+                issue_count: context.receipts.issues.len(),
+                overrides_applied: decision.overridden_findings.len(),
+            },
+            scan_scope: Some(JsonScanScope {
+                discovered_files: report.discovered_files,
+                scanned_files: report.scanned_files,
+                ignored_files: report.ignored_files,
+                scanned_paths: path_strings(&context.candidate_files),
+                ignored_paths: path_strings(&context.ignored_candidate_files),
+                ignore_patterns: context.config.scan_ignore_paths.clone(),
+            }),
+            result: if decision.verdict == Verdict::Block {
+                "blocked"
+            } else {
+                "completed"
+            },
+        };
+        print_json(&response)?;
+        return Ok(if decision.verdict == Verdict::Block {
+            ExitCode::FAILURE
+        } else {
+            ExitCode::SUCCESS
+        });
+    }
 
     println!("Wolfence scan");
     println!("  scope: staged");
@@ -63,9 +159,34 @@ fn run_staged_scan() -> AppResult<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn run_push_scan() -> AppResult<ExitCode> {
+fn run_push_scan(json: bool) -> AppResult<ExitCode> {
     match protected::evaluate_push_action()? {
         PushEvaluation::NoCommits { context } => {
+            if json {
+                print_json(&JsonScanResponse {
+                    command: "scan",
+                    scope: "push",
+                    action: "push-preview".to_string(),
+                    repo_root: context.repo_root.display().to_string(),
+                    mode: None,
+                    mode_source: None,
+                    status: "no-commits",
+                    branch: None,
+                    upstream: None,
+                    commits_ahead: None,
+                    scanners_run: 0,
+                    report: None,
+                    decision: None,
+                    receipts: JsonReceiptState {
+                        issues: context.receipts.issues.clone(),
+                        issue_count: context.receipts.issues.len(),
+                        overrides_applied: 0,
+                    },
+                    scan_scope: None,
+                    result: "no-op",
+                })?;
+                return Ok(ExitCode::SUCCESS);
+            }
             println!("Wolfence scan");
             println!("  scope: push");
             println!("  action: push-preview");
@@ -75,6 +196,31 @@ fn run_push_scan() -> AppResult<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         PushEvaluation::UpToDate { context } => {
+            if json {
+                print_json(&JsonScanResponse {
+                    command: "scan",
+                    scope: "push",
+                    action: "push-preview".to_string(),
+                    repo_root: context.repo_root.display().to_string(),
+                    mode: None,
+                    mode_source: None,
+                    status: "up-to-date",
+                    branch: None,
+                    upstream: None,
+                    commits_ahead: Some(0),
+                    scanners_run: 0,
+                    report: None,
+                    decision: None,
+                    receipts: JsonReceiptState {
+                        issues: context.receipts.issues.clone(),
+                        issue_count: context.receipts.issues.len(),
+                        overrides_applied: 0,
+                    },
+                    scan_scope: None,
+                    result: "no-op",
+                })?;
+                return Ok(ExitCode::SUCCESS);
+            }
             println!("Wolfence scan");
             println!("  scope: push");
             println!("  action: push-preview");
@@ -91,6 +237,46 @@ fn run_push_scan() -> AppResult<ExitCode> {
             upstream_branch,
             commits_ahead,
         } => {
+            if json {
+                print_json(&JsonScanResponse {
+                    command: "scan",
+                    scope: "push",
+                    action: "push-preview".to_string(),
+                    repo_root: context.repo_root.display().to_string(),
+                    mode: Some(context.config.mode.to_string()),
+                    mode_source: Some(context.config.mode_source.to_string()),
+                    status: "ready",
+                    branch: Some(current_branch.clone()),
+                    upstream: upstream_branch.clone(),
+                    commits_ahead: Some(commits_ahead),
+                    scanners_run: report.scanners_run,
+                    report: Some(report.clone()),
+                    decision: Some(decision.clone()),
+                    receipts: JsonReceiptState {
+                        issues: context.receipts.issues.clone(),
+                        issue_count: context.receipts.issues.len(),
+                        overrides_applied: decision.overridden_findings.len(),
+                    },
+                    scan_scope: Some(JsonScanScope {
+                        discovered_files: report.discovered_files,
+                        scanned_files: report.scanned_files,
+                        ignored_files: report.ignored_files,
+                        scanned_paths: path_strings(&context.candidate_files),
+                        ignored_paths: path_strings(&context.ignored_candidate_files),
+                        ignore_patterns: context.config.scan_ignore_paths.clone(),
+                    }),
+                    result: if decision.verdict == Verdict::Block {
+                        "blocked"
+                    } else {
+                        "completed"
+                    },
+                })?;
+                return Ok(if decision.verdict == Verdict::Block {
+                    ExitCode::FAILURE
+                } else {
+                    ExitCode::SUCCESS
+                });
+            }
             println!("Wolfence scan");
             println!("  scope: push");
             println!("  action: push-preview");
@@ -157,9 +343,9 @@ fn print_help() {
     println!("  Preview Wolfence findings without taking Git side effects");
     println!();
     println!("Usage:");
-    println!("  wolf scan");
-    println!("  wolf scan staged");
-    println!("  wolf scan push");
+    println!("  wolf scan [--json]");
+    println!("  wolf scan staged [--json]");
+    println!("  wolf scan push [--json]");
     println!();
     println!("Modes:");
     println!("  staged  Scan the currently staged files (default)");
@@ -194,7 +380,7 @@ mod tests {
         let previous_dir = env::current_dir().expect("current dir should resolve");
         env::set_current_dir(&repo_root).expect("should enter repo");
 
-        let result = run(ScanCommand::Push).expect("scan command should run");
+        let result = run(ScanCommand::Push { json: false }).expect("scan command should run");
 
         env::set_current_dir(previous_dir).expect("should restore current dir");
         assert_eq!(result, ExitCode::FAILURE);
@@ -215,7 +401,7 @@ mod tests {
         let previous_dir = env::current_dir().expect("current dir should resolve");
         env::set_current_dir(&repo_root).expect("should enter repo");
 
-        let result = run(ScanCommand::Staged).expect("scan command should run");
+        let result = run(ScanCommand::Staged { json: false }).expect("scan command should run");
 
         env::set_current_dir(previous_dir).expect("should restore current dir");
         assert_eq!(result, ExitCode::FAILURE);
@@ -236,7 +422,7 @@ mod tests {
         let previous_dir = env::current_dir().expect("current dir should resolve");
         env::set_current_dir(&repo_root).expect("should enter repo");
 
-        let result = run(ScanCommand::Staged).expect("scan command should run");
+        let result = run(ScanCommand::Staged { json: false }).expect("scan command should run");
 
         env::set_current_dir(previous_dir).expect("should restore current dir");
         assert_eq!(result, ExitCode::SUCCESS);
@@ -262,7 +448,7 @@ mod tests {
         let previous_dir = env::current_dir().expect("current dir should resolve");
         env::set_current_dir(&repo_root).expect("should enter repo");
 
-        let result = run(ScanCommand::Staged).expect("scan command should run");
+        let result = run(ScanCommand::Staged { json: false }).expect("scan command should run");
 
         env::set_current_dir(previous_dir).expect("should restore current dir");
         assert_eq!(result, ExitCode::SUCCESS);
@@ -283,7 +469,7 @@ mod tests {
         let previous_dir = env::current_dir().expect("current dir should resolve");
         env::set_current_dir(&repo_root).expect("should enter repo");
 
-        let result = run(ScanCommand::Push).expect("scan command should run");
+        let result = run(ScanCommand::Push { json: false }).expect("scan command should run");
 
         env::set_current_dir(previous_dir).expect("should restore current dir");
         assert_eq!(result, ExitCode::SUCCESS);

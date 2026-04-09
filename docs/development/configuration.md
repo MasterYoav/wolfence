@@ -122,10 +122,9 @@ cargo run -- receipt verify .wolfence/receipts/allow.toml
 cargo run -- receipt sign .wolfence/receipts/allow.toml security-team security-team /path/to/security-team-private.pem
 ```
 
-`cargo run -- init` also installs a managed `pre-push` Git hook. That hook
-calls an internal Wolfence command through `cargo run --quiet -- ...` so it
-stays aligned with the current source tree while the project is still in active
-development.
+`wolf init` also installs a managed `pre-push` Git hook. That hook pins the
+current Wolf executable directly, falls back to `wolf` on `PATH`, and only uses
+`cargo run --quiet --bin wolf -- ...` as a development fallback.
 
 Wolfence also reserves this directory for reviewable exception receipts:
 

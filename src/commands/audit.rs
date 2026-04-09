@@ -6,25 +6,84 @@
 
 use std::process::ExitCode;
 
+use serde::Serialize;
+
 use crate::app::AppResult;
 use crate::cli::AuditCommand;
 use crate::core::{audit, git};
 
+use super::json::{print_json, print_json_error};
+
 pub fn run(command: AuditCommand) -> AppResult<ExitCode> {
-    match command {
-        AuditCommand::List => run_list(),
-        AuditCommand::Verify => run_verify(),
+    let json = match &command {
+        AuditCommand::List { json } | AuditCommand::Verify { json } => *json,
+        AuditCommand::Help => false,
+    };
+
+    let result = match command {
+        AuditCommand::List { json } => run_list(json),
+        AuditCommand::Verify { json } => run_verify(json),
         AuditCommand::Help => {
             print_help();
             Ok(ExitCode::SUCCESS)
         }
+    };
+
+    if json {
+        if let Err(error) = &result {
+            print_json_error("audit", error)?;
+            return Ok(ExitCode::FAILURE);
+        }
     }
+
+    result
 }
 
-fn run_list() -> AppResult<ExitCode> {
+#[derive(Serialize)]
+struct AuditListJsonResponse {
+    command: &'static str,
+    subcommand: &'static str,
+    repo_root: String,
+    verification: audit::AuditVerification,
+    entries: Vec<audit::AuditEntry>,
+    result: &'static str,
+}
+
+#[derive(Serialize)]
+struct AuditVerifyJsonResponse {
+    command: &'static str,
+    subcommand: &'static str,
+    repo_root: String,
+    verification: audit::AuditVerification,
+    result: &'static str,
+}
+
+fn run_list(json: bool) -> AppResult<ExitCode> {
     let repo_root = git::discover_repo_root()?;
     let entries = audit::read_audit_log(&repo_root)?;
     let verification = audit::verify_audit_log(&repo_root)?;
+
+    if json {
+        print_json(&AuditListJsonResponse {
+            command: "audit",
+            subcommand: "list",
+            repo_root: repo_root.display().to_string(),
+            result: if entries.is_empty() {
+                "no-entries"
+            } else if verification.healthy {
+                "healthy"
+            } else {
+                "unhealthy"
+            },
+            verification: verification.clone(),
+            entries,
+        })?;
+        return Ok(if verification.healthy {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        });
+    }
 
     println!("Wolfence audit");
     println!("  repo root: {}", repo_root.display());
@@ -39,7 +98,7 @@ fn run_list() -> AppResult<ExitCode> {
         }
     );
 
-    if let Some(issue) = verification.issue {
+    if let Some(issue) = verification.issue.clone() {
         println!("  issue: {issue}");
     }
 
@@ -99,9 +158,28 @@ fn run_list() -> AppResult<ExitCode> {
     })
 }
 
-fn run_verify() -> AppResult<ExitCode> {
+fn run_verify(json: bool) -> AppResult<ExitCode> {
     let repo_root = git::discover_repo_root()?;
     let verification = audit::verify_audit_log(&repo_root)?;
+
+    if json {
+        print_json(&AuditVerifyJsonResponse {
+            command: "audit",
+            subcommand: "verify",
+            repo_root: repo_root.display().to_string(),
+            result: if verification.healthy {
+                "verified"
+            } else {
+                "verification-failed"
+            },
+            verification: verification.clone(),
+        })?;
+        return Ok(if verification.healthy {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        });
+    }
 
     println!("Wolfence audit verify");
     println!("  repo root: {}", repo_root.display());
@@ -127,7 +205,7 @@ fn print_help() {
     println!("  List and verify the local Wolfence audit chain");
     println!();
     println!("Usage:");
-    println!("  wolf audit <command>");
+    println!("  wolf audit <command> [--json]");
     println!();
     println!("Commands:");
     println!("  list    Show audit log health and the 10 most recent entries");

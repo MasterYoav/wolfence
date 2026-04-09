@@ -22,6 +22,17 @@ Scanning alone is not enough. A local gate can still fail operationally if:
 
 The doctor command audits those conditions directly.
 
+Wolfence also supports:
+
+```bash
+wolf doctor --json
+```
+
+Use the text output for direct terminal review.
+
+Use `--json` for the native app or other local integrations. The payload
+contract is documented in `docs/development/json-output.md`.
+
 ## Current Checks
 
 ### Repo config
@@ -82,11 +93,11 @@ Warns when:
 
 These are useful development tools, but they should never be invisible.
 
-### Cargo runtime
+### Wolf runtime
 
-Checks whether `cargo` is available. The current managed `pre-push` hook runs
-Wolfence through `cargo run` while the project is still under active
-development.
+Checks whether the running `wolf` executable resolves to a stable binary path.
+Managed hooks now pin that binary directly and only fall back to Cargo when the
+binary cannot be found.
 
 ### Git identity
 
@@ -116,6 +127,7 @@ Checks whether the repo has:
 - no `pre-push` hook
 - an unmanaged `pre-push` hook
 - a managed Wolfence `pre-push` hook that is executable
+- which launcher model the managed hook uses
 
 This is how Wolfence stays honest about native `git push`. If the hook is
 missing or unmanaged, native pushes are not reliably guarded.
@@ -149,7 +161,7 @@ failures, such as:
 
 - a managed hook that is not executable
 - a repo config file that exists but is ignored by Git
-- a missing Cargo runtime for the current managed-hook model
+- a missing or invalid Wolf runtime for the current managed-hook model
 - a repository with trusted receipt keys but no working OpenSSL runtime
 - a repository that publishes only expired trust keys
 - a repository that requires signed receipts but has no active trusted keys

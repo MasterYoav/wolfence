@@ -8,19 +8,24 @@ use std::fmt::{self, Display, Formatter};
 use std::path::Path;
 use std::process::{Command, ExitCode};
 
+use serde::Serialize;
+
 use crate::app::AppResult;
 use crate::core::audit;
 use crate::core::config::{ConfigSource, ResolvedConfig, REPO_CONFIG_RELATIVE_PATH};
 use crate::core::git;
 use crate::core::git::PushStatus;
-use crate::core::hooks::{self, HookState};
+use crate::core::hooks::{self, HookLauncherKind, HookState};
 use crate::core::osv::OsvMode;
 use crate::core::policy::EnforcementMode;
 use crate::core::receipt_policy::{ReceiptApprovalPolicy, RECEIPT_POLICY_FILE_RELATIVE_PATH};
 use crate::core::receipts::{ReceiptIndex, RECEIPTS_DIR_RELATIVE_PATH};
 use crate::core::trust::{TrustStore, TRUST_DIR_RELATIVE_PATH};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use super::json::{print_json, print_json_error};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 enum DoctorStatus {
     Pass,
     Warn,
@@ -39,7 +44,7 @@ impl Display for DoctorStatus {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 struct DoctorCheck {
     name: &'static str,
     status: DoctorStatus,
@@ -47,7 +52,7 @@ struct DoctorCheck {
     remediation: Option<String>,
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, Serialize)]
 struct DoctorSummary {
     pass: usize,
     warn: usize,
@@ -55,11 +60,50 @@ struct DoctorSummary {
     info: usize,
 }
 
-pub fn run() -> AppResult<ExitCode> {
+#[derive(Serialize)]
+struct DoctorJsonResponse {
+    command: &'static str,
+    repo_root: String,
+    effective_mode: String,
+    mode_source: String,
+    summary: DoctorSummary,
+    checks: Vec<DoctorCheck>,
+    result: &'static str,
+}
+
+pub fn run(json: bool) -> AppResult<ExitCode> {
+    let result = run_internal(json);
+    if json {
+        if let Err(error) = &result {
+            print_json_error("doctor", error)?;
+            return Ok(ExitCode::FAILURE);
+        }
+    }
+    result
+}
+
+fn run_internal(json: bool) -> AppResult<ExitCode> {
     let repo_root = git::discover_repo_root()?;
     let config = ResolvedConfig::load_for_repo(&repo_root)?;
     let checks = build_checks(&repo_root, &config)?;
     let summary = summarize_checks(&checks);
+
+    if json {
+        print_json(&DoctorJsonResponse {
+            command: "doctor",
+            repo_root: repo_root.display().to_string(),
+            effective_mode: config.mode.to_string(),
+            mode_source: config.mode_source.to_string(),
+            summary,
+            checks,
+            result: if summary.fail > 0 { "failed" } else { "ok" },
+        })?;
+        return Ok(if summary.fail > 0 {
+            ExitCode::FAILURE
+        } else {
+            ExitCode::SUCCESS
+        });
+    }
 
     println!("Wolfence doctor");
     println!("  repo root: {}", repo_root.display());
@@ -108,7 +152,7 @@ fn build_checks(repo_root: &Path, config: &ResolvedConfig) -> AppResult<Vec<Doct
         checks.push(check);
     }
 
-    checks.push(check_cargo_runtime());
+    checks.push(check_wolf_runtime());
     checks.push(check_git_identity(repo_root)?);
     checks.push(check_push_remote(repo_root)?);
     checks.push(check_curl_runtime());
@@ -139,10 +183,7 @@ fn check_repo_config(config: &ResolvedConfig) -> DoctorCheck {
     let remediation = if config.repo_config_exists {
         None
     } else {
-        Some(
-            "Run `cargo run -- init` so the repository policy is explicit and reviewable."
-                .to_string(),
-        )
+        Some("Run `wolf init` so the repository policy is explicit and reviewable.".to_string())
     };
 
     DoctorCheck {
@@ -345,7 +386,7 @@ fn check_receipt_policy_trackability(repo_root: &Path) -> AppResult<DoctorCheck>
                 RECEIPT_POLICY_FILE_RELATIVE_PATH
             ),
             remediation: Some(
-                "Run `cargo run -- init` or commit `.wolfence/policy/receipts.toml` if you want explicit reviewer governance."
+                "Run `wolf init` or commit `.wolfence/policy/receipts.toml` if you want explicit reviewer governance."
                     .to_string(),
             ),
         });
@@ -618,29 +659,73 @@ fn check_dry_run_override() -> Option<DoctorCheck> {
     })
 }
 
-fn check_cargo_runtime() -> DoctorCheck {
-    let output = Command::new("cargo").arg("--version").output();
-    match output {
-        Ok(command) if command.status.success() => DoctorCheck {
-            name: "cargo runtime",
+fn check_wolf_runtime() -> DoctorCheck {
+    let binary_path = match hooks::runtime_binary_path() {
+        Ok(path) => path,
+        Err(error) => {
+            return DoctorCheck {
+                name: "wolf runtime",
+                status: DoctorStatus::Fail,
+                detail: format!("failed to resolve the running Wolf executable: {error}"),
+                remediation: Some(
+                    "Reinstall Wolfence so native Git hooks can call a stable `wolf` binary."
+                        .to_string(),
+                ),
+            };
+        }
+    };
+
+    if binary_path.exists() {
+        return DoctorCheck {
+            name: "wolf runtime",
             status: DoctorStatus::Pass,
-            detail: String::from_utf8_lossy(&command.stdout).trim().to_string(),
+            detail: format!(
+                "the running Wolf executable is available at `{}` and can be pinned into managed hooks.",
+                binary_path.display()
+            ),
             remediation: None,
+        };
+    }
+
+    let cargo_output = Command::new("cargo").arg("--version").output();
+    match cargo_output {
+        Ok(command) if command.status.success() => DoctorCheck {
+            name: "wolf runtime",
+            status: DoctorStatus::Warn,
+            detail: format!(
+                "the current Wolf executable path `{}` does not exist, but cargo is available as a development fallback: {}",
+                binary_path.display(),
+                String::from_utf8_lossy(&command.stdout).trim()
+            ),
+            remediation: Some(
+                "Reinstall Wolfence so managed hooks can pin a stable binary instead of relying on Cargo fallback."
+                    .to_string(),
+            ),
         },
         Ok(command) => DoctorCheck {
-            name: "cargo runtime",
+            name: "wolf runtime",
             status: DoctorStatus::Fail,
             detail: format!(
-                "cargo returned a non-success status: {}",
+                "the current Wolf executable path `{}` does not exist, and cargo fallback also failed: {}",
+                binary_path.display(),
                 String::from_utf8_lossy(&command.stderr).trim()
             ),
-            remediation: Some("Install or repair the local Rust toolchain because the managed Git hook executes Wolfence through `cargo run` during development.".to_string()),
+            remediation: Some(
+                "Reinstall Wolfence or repair the local Rust toolchain before relying on managed Git hooks."
+                    .to_string(),
+            ),
         },
         Err(error) => DoctorCheck {
-            name: "cargo runtime",
+            name: "wolf runtime",
             status: DoctorStatus::Fail,
-            detail: format!("failed to execute `cargo --version`: {error}"),
-            remediation: Some("Install the Rust toolchain so the managed pre-push hook can execute Wolfence.".to_string()),
+            detail: format!(
+                "the current Wolf executable path `{}` does not exist, and cargo fallback is unavailable: {error}",
+                binary_path.display()
+            ),
+            remediation: Some(
+                "Reinstall Wolfence so managed hooks can invoke a stable binary directly."
+                    .to_string(),
+            ),
         },
     }
 }
@@ -802,6 +887,11 @@ fn check_openssl_runtime(repo_root: &Path) -> AppResult<DoctorCheck> {
 fn check_pre_push_hook(repo_root: &Path) -> AppResult<DoctorCheck> {
     let inspection = hooks::inspect_hook(repo_root, "pre-push")?;
 
+    let launcher_detail = inspection
+        .launcher
+        .map(HookLauncherKind::description)
+        .unwrap_or("unknown launcher");
+
     let (status, detail, remediation) = match inspection.state {
         HookState::Missing => (
             DoctorStatus::Warn,
@@ -809,7 +899,7 @@ fn check_pre_push_hook(repo_root: &Path) -> AppResult<DoctorCheck> {
                 "{} is missing, so native `git push` is currently unguarded. Only `wolf push` enforces policy.",
                 inspection.path.display()
             ),
-            Some("Run `cargo run -- init` to install the managed pre-push hook.".to_string()),
+            Some("Run `wolf init` to install the managed pre-push hook.".to_string()),
         ),
         HookState::Unmanaged => (
             DoctorStatus::Warn,
@@ -825,13 +915,14 @@ fn check_pre_push_hook(repo_root: &Path) -> AppResult<DoctorCheck> {
                 "{} is managed by Wolfence but is not executable, so Git will not run it.",
                 inspection.path.display()
             ),
-            Some("Re-run `cargo run -- init` to restore executable hook permissions.".to_string()),
+            Some("Re-run `wolf init` to restore executable hook permissions.".to_string()),
         ),
         HookState::Managed => (
             DoctorStatus::Pass,
             format!(
-                "{} is managed by Wolfence and executable.",
-                inspection.path.display()
+                "{} is managed by Wolfence, executable, and uses {}.",
+                inspection.path.display(),
+                launcher_detail
             ),
             None,
         ),

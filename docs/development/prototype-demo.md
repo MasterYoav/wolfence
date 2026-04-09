@@ -30,6 +30,17 @@ cargo run -- doctor
 The second command should report no blocking failures before you rely on the
 results.
 
+If you want to inspect the same state through a machine-readable contract while
+testing UI or automation, use the parallel JSON commands documented in
+`docs/development/json-output.md`:
+
+```bash
+cargo run -- doctor --json
+cargo run -- scan --json
+cargo run -- scan push --json
+cargo run -- push --json
+```
+
 ## Scenario 1: Allowed Push
 
 Create a harmless commit:
@@ -100,4 +111,4 @@ continue with:
 git push
 ```
 
-because `cargo run -- init` installs the managed `pre-push` hook.
+because `wolf init` installs the managed `pre-push` hook.

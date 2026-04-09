@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::app::AppResult;
+use serde::Serialize;
 
 use super::context::ProtectedAction;
 use super::findings::FindingCategory;
@@ -22,7 +23,7 @@ use super::trust::TrustStore;
 pub const RECEIPTS_DIR_RELATIVE_PATH: &str = ".wolfence/receipts";
 
 /// One validated override receipt that can suppress a finding for one action.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OverrideReceipt {
     pub path: PathBuf,
     pub receipt_id: String,
@@ -42,7 +43,7 @@ pub struct OverrideReceipt {
 }
 
 /// Non-fatal issue encountered while loading receipts.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReceiptIssue {
     pub path: PathBuf,
     pub detail: String,

@@ -13,6 +13,7 @@ use crate::app::AppResult;
 use super::git;
 
 pub const MANAGED_MARKER: &str = "wolfence-managed-hook";
+const LAUNCHER_MARKER: &str = "wolfence-launcher";
 
 /// Result of attempting to install or refresh one hook.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +47,23 @@ pub struct HookInspection {
     pub path: PathBuf,
     pub state: HookState,
     pub executable: bool,
+    pub launcher: Option<HookLauncherKind>,
+}
+
+/// How one managed hook tries to execute Wolfence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookLauncherKind {
+    BinaryPath,
+    CargoFallback,
+}
+
+impl HookLauncherKind {
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::BinaryPath => "pinned Wolf binary with PATH/cargo fallback",
+            Self::CargoFallback => "cargo fallback only",
+        }
+    }
 }
 
 /// Installs or refreshes the managed Wolfence hooks for one repository.
@@ -53,7 +71,7 @@ pub fn install_managed_hooks(repo_root: &Path) -> AppResult<Vec<HookInstallRepor
     let hooks_dir = git::hooks_dir(repo_root)?;
     fs::create_dir_all(&hooks_dir)?;
 
-    let pre_push = install_one_hook(&hooks_dir, "pre-push", hook_script("hook-pre-push"))?;
+    let pre_push = install_one_hook(&hooks_dir, "pre-push", hook_script("hook-pre-push")?)?;
     let removed_pre_commit = remove_managed_hook_if_present(&hooks_dir, "pre-commit")?;
     let removed_commit_msg = remove_managed_hook_if_present(&hooks_dir, "commit-msg")?;
 
@@ -79,6 +97,7 @@ pub fn inspect_hook(repo_root: &Path, hook_name: &'static str) -> AppResult<Hook
             path,
             state: HookState::Missing,
             executable: false,
+            launcher: None,
         });
     }
 
@@ -92,6 +111,7 @@ pub fn inspect_hook(repo_root: &Path, hook_name: &'static str) -> AppResult<Hook
     Ok(HookInspection {
         hook_name,
         executable: is_executable(&path)?,
+        launcher: detect_launcher_kind(&contents),
         path,
         state,
     })
@@ -152,10 +172,37 @@ fn remove_managed_hook_if_present(
     }))
 }
 
-fn hook_script(command: &str) -> String {
-    format!(
-        "#!/bin/sh\n# {MANAGED_MARKER}\nset -eu\nREPO_ROOT=\"$(git rev-parse --show-toplevel)\"\ncd \"$REPO_ROOT\"\nexec cargo run --quiet --bin wolf -- {command}\n"
-    )
+pub fn runtime_binary_path() -> AppResult<PathBuf> {
+    Ok(std::env::current_exe()?)
+}
+
+fn hook_script(command: &str) -> AppResult<String> {
+    let binary = shell_quote(&runtime_binary_path()?.display().to_string());
+
+    Ok(format!(
+        "#!/bin/sh\n# {MANAGED_MARKER}\n# {LAUNCHER_MARKER}: binary-path\nset -eu\nREPO_ROOT=\"$(git rev-parse --show-toplevel)\"\ncd \"$REPO_ROOT\"\nWOLF_BIN={binary}\nif [ -x \"$WOLF_BIN\" ]; then\n  exec \"$WOLF_BIN\" {command}\nfi\nif command -v wolf >/dev/null 2>&1; then\n  exec wolf {command}\nfi\nif [ -f Cargo.toml ] && command -v cargo >/dev/null 2>&1; then\n  exec cargo run --quiet --bin wolf -- {command}\nfi\necho \"wolf: unable to locate a runnable Wolfence binary for the managed pre-push hook.\" >&2\nexit 1\n"
+    ))
+}
+
+fn detect_launcher_kind(contents: &str) -> Option<HookLauncherKind> {
+    if !contents.contains(MANAGED_MARKER) {
+        return None;
+    }
+
+    if contents.contains("# wolfence-launcher: binary-path") {
+        return Some(HookLauncherKind::BinaryPath);
+    }
+
+    if contents.contains("cargo run --quiet --bin wolf --") {
+        return Some(HookLauncherKind::CargoFallback);
+    }
+
+    None
+}
+
+fn shell_quote(value: &str) -> String {
+    let escaped = value.replace('\'', "'\"'\"'");
+    format!("'{escaped}'")
 }
 
 #[cfg(unix)]
@@ -184,4 +231,34 @@ fn ensure_executable(_path: &Path) -> AppResult<()> {
 #[cfg(not(unix))]
 fn is_executable(_path: &Path) -> AppResult<bool> {
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{detect_launcher_kind, hook_script, HookLauncherKind};
+
+    #[test]
+    fn managed_hook_script_prefers_binary_launcher_and_keeps_fallbacks() {
+        let script = hook_script("hook-pre-push").expect("hook script should render");
+
+        assert!(script.contains("# wolfence-launcher: binary-path"));
+        assert!(script.contains("WOLF_BIN="));
+        assert!(script.contains("exec \"$WOLF_BIN\" hook-pre-push"));
+        assert!(script.contains("exec wolf hook-pre-push"));
+        assert!(script.contains("cargo run --quiet --bin wolf -- hook-pre-push"));
+        assert_eq!(
+            detect_launcher_kind(&script),
+            Some(HookLauncherKind::BinaryPath)
+        );
+    }
+
+    #[test]
+    fn legacy_managed_hook_without_launcher_marker_is_detected_as_cargo_fallback() {
+        let legacy =
+            "# wolfence-managed-hook\nexec cargo run --quiet --bin wolf -- hook-pre-push\n";
+        assert_eq!(
+            detect_launcher_kind(legacy),
+            Some(HookLauncherKind::CargoFallback)
+        );
+    }
 }

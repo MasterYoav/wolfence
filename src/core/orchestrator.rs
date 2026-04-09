@@ -7,6 +7,7 @@
 use std::cmp::Reverse;
 
 use crate::app::AppResult;
+use serde::Serialize;
 
 use super::context::ExecutionContext;
 use super::findings::{Confidence, Finding, FindingCategory, Severity};
@@ -15,7 +16,7 @@ use super::scanners::{
 };
 
 /// Final scan output for one invocation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ScanReport {
     pub findings: Vec<Finding>,
     pub discovered_files: usize,

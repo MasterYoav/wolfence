@@ -115,7 +115,9 @@ Core docs:
 - `docs/security/trust-store.md`
 - `docs/development/audit.md`
 - `docs/development/doctor.md`
+- `docs/development/json-output.md`
 - `docs/development/prototype-demo.md`
+- `docs/ui/swiftui-xcode-handoff.md`
 - `docs/repo-map.md`
 
 ------------------------------------------------------------------------
@@ -124,12 +126,18 @@ Core docs:
 
 wolf init\
 wolf push\
+wolf push --json\
 wolf scan\
+wolf scan --json\
 wolf scan push\
+wolf scan push --json\
 wolf doctor\
+wolf doctor --json\
 wolf config\
 wolf audit list\
+wolf audit list --json\
 wolf audit verify\
+wolf audit verify --json\
 wolf trust list\
 wolf trust verify <key-id>\
 wolf trust init <key-id> <owner> <expires-on> [categories]\
@@ -161,6 +169,10 @@ wolf push
 During development, `cargo run -- push` still works, but the intended product
 surface is `wolf ...`.
 
+For UI work and automation, prefer the documented machine-readable surfaces in:
+
+`docs/development/json-output.md`
+
 ------------------------------------------------------------------------
 
 ## 🧪 Modes
@@ -183,11 +195,11 @@ Current precedence:
 
 Initialize it with:
 
-`cargo run -- init`
+`wolf init`
 
 Inspect the resolved config with:
 
-`cargo run -- config`
+`wolf config`
 
 Try the current local prototype end to end with:
 
@@ -216,6 +228,7 @@ Current `wolf push` behavior:
 - repo-local override receipts can suppress specific findings only when they are explicit, unexpired, and integrity-valid
 - protected push decisions are written to a chained local audit log under `.wolfence/audit/`
 - the audit log now distinguishes policy allowance from real `git push` completion and records push transport failures explicitly
+- `wolf doctor --json`, `wolf scan --json`, `wolf push --json`, and `wolf audit ... --json` expose stable machine-readable envelopes for native UI and local automation
 
 Current detection strengths:
 

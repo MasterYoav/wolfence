@@ -12,13 +12,21 @@ List the current chain health and the 10 most recent entries:
 
 ```bash
 cargo run -- audit list
+cargo run -- audit list --json
 ```
 
 Verify the hash chain only:
 
 ```bash
 cargo run -- audit verify
+cargo run -- audit verify --json
 ```
+
+Use the text output for direct operator review.
+
+Use `--json` for native UI or script integration.
+
+The full machine-readable contract is documented in `docs/development/json-output.md`.
 
 ## What `audit list` Shows
 

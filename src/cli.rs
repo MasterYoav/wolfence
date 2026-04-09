@@ -69,16 +69,16 @@ pub enum TrustCommand {
 /// Parsed audit-specific operator workflows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuditCommand {
-    List,
-    Verify,
+    List { json: bool },
+    Verify { json: bool },
     Help,
 }
 
 /// Parsed scan-specific operator workflows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScanCommand {
-    Staged,
-    Push,
+    Staged { json: bool },
+    Push { json: bool },
     Help,
 }
 
@@ -86,10 +86,10 @@ pub enum ScanCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Init,
-    Push,
+    Push { json: bool },
     HookPrePush,
     Scan(ScanCommand),
-    Doctor,
+    Doctor { json: bool },
     Config,
     Receipt(ReceiptCommand),
     Trust(TrustCommand),
@@ -110,19 +110,17 @@ impl Cli {
                 ensure_no_extra_args(args)?;
                 Command::Init
             }
-            Some("push") => {
-                ensure_no_extra_args(args)?;
-                Command::Push
-            }
+            Some("push") => Command::Push {
+                json: parse_json_flag(args)?,
+            },
             Some("hook-pre-push") => {
                 ensure_no_extra_args(args)?;
                 Command::HookPrePush
             }
             Some("scan") => Command::Scan(parse_scan_command(args)?),
-            Some("doctor") => {
-                ensure_no_extra_args(args)?;
-                Command::Doctor
-            }
+            Some("doctor") => Command::Doctor {
+                json: parse_json_flag(args)?,
+            },
             Some("config") => {
                 ensure_no_extra_args(args)?;
                 Command::Config
@@ -276,14 +274,17 @@ fn parse_audit_command<I>(mut args: I) -> Result<AuditCommand, String>
 where
     I: Iterator<Item = String>,
 {
+    let mut args = collect_args(&mut args);
     let subcommand = match args.next().as_deref() {
         Some("list") => {
-            ensure_no_extra_args(args)?;
-            AuditCommand::List
+            AuditCommand::List {
+                json: parse_json_flag(args)?,
+            }
         }
         Some("verify") => {
-            ensure_no_extra_args(args)?;
-            AuditCommand::Verify
+            AuditCommand::Verify {
+                json: parse_json_flag(args)?,
+            }
         }
         None | Some("-h" | "--help" | "help") => {
             ensure_no_extra_args(args)?;
@@ -303,15 +304,22 @@ fn parse_scan_command<I>(mut args: I) -> Result<ScanCommand, String>
 where
     I: Iterator<Item = String>,
 {
+    let mut args = collect_args(&mut args);
     let subcommand = match args.next().as_deref() {
-        None => ScanCommand::Staged,
+        None => ScanCommand::Staged { json: false },
         Some("push" | "--push") => {
-            ensure_no_extra_args(args)?;
-            ScanCommand::Push
+            ScanCommand::Push {
+                json: parse_json_flag(args)?,
+            }
         }
         Some("staged" | "--staged") => {
+            ScanCommand::Staged {
+                json: parse_json_flag(args)?,
+            }
+        }
+        Some("--json") => {
             ensure_no_extra_args(args)?;
-            ScanCommand::Staged
+            ScanCommand::Staged { json: true }
         }
         Some("-h" | "--help" | "help") => {
             ensure_no_extra_args(args)?;
@@ -325,6 +333,33 @@ where
     };
 
     Ok(subcommand)
+}
+
+fn parse_json_flag<I>(args: I) -> Result<bool, String>
+where
+    I: Iterator<Item = String>,
+{
+    let mut json = false;
+
+    for arg in args {
+        match arg.as_str() {
+            "--json" => json = true,
+            other => {
+                return Err(format!(
+                    "unexpected extra argument `{other}`. The current scaffold accepts only the documented arguments."
+                ))
+            }
+        }
+    }
+
+    Ok(json)
+}
+
+fn collect_args<I>(args: &mut I) -> std::vec::IntoIter<String>
+where
+    I: Iterator<Item = String>,
+{
+    args.collect::<Vec<_>>().into_iter()
 }
 
 fn ensure_no_extra_args<I>(mut args: I) -> Result<(), String>
@@ -361,20 +396,52 @@ mod tests {
     #[test]
     fn parses_push_command() {
         let cli = Cli::parse(vec!["push".to_string()].into_iter()).expect("parse should succeed");
-        assert_eq!(cli.command, Command::Push);
+        assert_eq!(cli.command, Command::Push { json: false });
+    }
+
+    #[test]
+    fn parses_push_command_with_json() {
+        let cli = Cli::parse(vec!["push".to_string(), "--json".to_string()].into_iter())
+            .expect("parse should succeed");
+        assert_eq!(cli.command, Command::Push { json: true });
     }
 
     #[test]
     fn parses_staged_scan_by_default() {
         let cli = Cli::parse(vec!["scan".to_string()].into_iter()).expect("parse should succeed");
-        assert_eq!(cli.command, Command::Scan(ScanCommand::Staged));
+        assert_eq!(
+            cli.command,
+            Command::Scan(ScanCommand::Staged { json: false })
+        );
     }
 
     #[test]
     fn parses_push_scope_scan_command() {
         let cli = Cli::parse(vec!["scan".to_string(), "push".to_string()].into_iter())
             .expect("parse should succeed");
-        assert_eq!(cli.command, Command::Scan(ScanCommand::Push));
+        assert_eq!(
+            cli.command,
+            Command::Scan(ScanCommand::Push { json: false })
+        );
+    }
+
+    #[test]
+    fn parses_staged_scan_json_flag_without_explicit_subcommand() {
+        let cli = Cli::parse(vec!["scan".to_string(), "--json".to_string()].into_iter())
+            .expect("parse should succeed");
+        assert_eq!(
+            cli.command,
+            Command::Scan(ScanCommand::Staged { json: true })
+        );
+    }
+
+    #[test]
+    fn parses_push_scope_scan_command_with_json() {
+        let cli = Cli::parse(
+            vec!["scan".to_string(), "push".to_string(), "--json".to_string()].into_iter(),
+        )
+        .expect("parse should succeed");
+        assert_eq!(cli.command, Command::Scan(ScanCommand::Push { json: true }));
     }
 
     #[test]
@@ -606,14 +673,44 @@ mod tests {
     fn parses_audit_list_command() {
         let cli = Cli::parse(vec!["audit".to_string(), "list".to_string()].into_iter())
             .expect("parse should succeed");
-        assert_eq!(cli.command, Command::Audit(AuditCommand::List));
+        assert_eq!(
+            cli.command,
+            Command::Audit(AuditCommand::List { json: false })
+        );
     }
 
     #[test]
     fn parses_audit_verify_command() {
         let cli = Cli::parse(vec!["audit".to_string(), "verify".to_string()].into_iter())
             .expect("parse should succeed");
-        assert_eq!(cli.command, Command::Audit(AuditCommand::Verify));
+        assert_eq!(
+            cli.command,
+            Command::Audit(AuditCommand::Verify { json: false })
+        );
+    }
+
+    #[test]
+    fn parses_audit_verify_command_with_json() {
+        let cli = Cli::parse(
+            vec![
+                "audit".to_string(),
+                "verify".to_string(),
+                "--json".to_string(),
+            ]
+            .into_iter(),
+        )
+        .expect("parse should succeed");
+        assert_eq!(
+            cli.command,
+            Command::Audit(AuditCommand::Verify { json: true })
+        );
+    }
+
+    #[test]
+    fn parses_doctor_command_with_json() {
+        let cli = Cli::parse(vec!["doctor".to_string(), "--json".to_string()].into_iter())
+            .expect("parse should succeed");
+        assert_eq!(cli.command, Command::Doctor { json: true });
     }
 
     #[test]
