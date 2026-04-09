@@ -13,5 +13,6 @@ struct WolfenceApp: App {
         WindowGroup {
             ContentView()
         }
+        .windowStyle(.hiddenTitleBar)
     }
 }

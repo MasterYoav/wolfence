@@ -1,0 +1,38 @@
+# Wolfence receipt approval policy
+#
+# This file constrains who can review or approve override receipts and how
+# long they may stay active.
+
+# Maximum number of days between `created_on` and `expires_on`.
+# max_lifetime_days = 14
+
+# Require every active receipt to declare an explicit `category` field instead
+# of relying on legacy fingerprint-prefix inference.
+require_explicit_category = false
+
+# Require signed receipts for all categories, even if the repo has not yet
+# adopted a trust-store-driven global signed posture.
+require_signed_receipts = false
+
+# Require `reviewer` and `reviewed_on` on every active receipt.
+require_reviewer_metadata = false
+
+# Restrict who may review receipts.
+allowed_reviewers = []
+
+# Restrict who may appear as the signing approver on signed receipts.
+allowed_approvers = []
+
+# Restrict which trusted key ids may sign receipts.
+allowed_key_ids = []
+
+# Optional category-specific overrides. These replace the repo-wide allowlists
+# for the category they target.
+#
+# [categories.secret]
+# require_signed_receipts = true
+# require_reviewer_metadata = true
+# max_lifetime_days = 7
+# allowed_reviewers = ["security-team"]
+# allowed_approvers = ["security-team"]
+# allowed_key_ids = ["security-team"]

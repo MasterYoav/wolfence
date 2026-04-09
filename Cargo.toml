@@ -1,0 +1,16 @@
+[package]
+name = "wolfence"
+version = "0.1.0"
+edition = "2021"
+description = "A security-first Git interface that blocks unsafe code before it leaves a developer machine."
+license = "MIT"
+repository = "https://github.com/MasterYoav/wolfence"
+default-run = "wolf"
+
+[[bin]]
+name = "wolf"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
