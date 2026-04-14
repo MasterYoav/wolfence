@@ -67,7 +67,7 @@ The scanner also looks for suspicious assignments such as:
 - `API_KEY=...`
 - `"client_secret": "..."`
 - `token: ...`
-- `"private_key": "-----BEGIN PRIVATE KEY-----..."`
+- `"private_key": "<redacted-private-key-material>"`
 
 A generic assignment is only flagged when:
 
@@ -262,7 +262,7 @@ Current examples include:
 - elevated CI runner settings
 - Dockerfiles with mutable or non-digest-pinned base images
 - Dockerfiles that leave the final runtime stage on explicit `USER root` or `USER 0`
-- Dockerfiles that fetch remote content and pipe it directly into a shell such as `curl ... | sh`
+- Dockerfiles that fetch remote content and pipe it directly into a shell such as `curl <url> | <shell>`
 - Dockerfiles that fetch remote content and then execute the downloaded payload in the same `RUN` step
 - Dockerfiles that use `ADD https://...` to pull remote build inputs directly
 - Kubernetes `Secret` manifests with inline `data` or `stringData`
@@ -334,8 +334,8 @@ Current examples include:
 - weak hashes for password-, token-, or secret-like material, plus legacy cipher or ECB-mode encryption usage
 - uploaded-file writes and archive extraction that operate directly from request or uploaded-file context
 - request-controlled privilege or ownership assignment, plus privileged surfaces explicitly marked `AllowAny`, `PermitAll`, `skipAuth`, or equivalent bypass markers
-- remote script execution patterns such as `curl ... | sh`, `wget ... | bash`,
-  or `Invoke-WebRequest ... | iex`
+- remote script execution patterns such as `curl <url> | <shell>`,
+  `wget <url> | <shell>`, or `Invoke-WebRequest <url> | <shell>`
 
 These are intentionally high-signal, local heuristics rather than a full static
 analysis engine. Remote-script execution is severity-scaled by path: it is
