@@ -336,7 +336,7 @@ fn validate_ready_transport(
 ) -> Result<(), String> {
     let expected_local_ref = format!("refs/heads/{current_branch}");
     let expected_remote_ref = upstream_branch
-        .map(ToOwned::to_owned)
+        .map(normalize_upstream_branch_ref)
         .unwrap_or_else(|| expected_local_ref.clone());
 
     match transport {
@@ -361,6 +361,18 @@ fn validate_ready_transport(
             Ok(())
         }
     }
+}
+
+fn normalize_upstream_branch_ref(upstream_branch: &str) -> String {
+    if upstream_branch.starts_with("refs/heads/") {
+        return upstream_branch.to_string();
+    }
+
+    if let Some((_, branch)) = upstream_branch.split_once('/') {
+        return format!("refs/heads/{branch}");
+    }
+
+    format!("refs/heads/{upstream_branch}")
 }
 
 fn display_ref(reference: &str) -> &str {
@@ -491,6 +503,18 @@ mod tests {
             validate_ready_transport(&transport, "main", Some("refs/heads/main")).unwrap_err();
 
         assert!(error.contains("evaluated branch `main`"));
+    }
+
+    #[test]
+    fn pre_push_transport_accepts_remote_tracking_upstream_names() {
+        let transport = PrePushTransport::Branch(PrePushBranchTransport {
+            local_ref: "refs/heads/main".to_string(),
+            remote_ref: "refs/heads/main".to_string(),
+        });
+
+        let result = validate_ready_transport(&transport, "main", Some("origin/main"));
+
+        assert!(result.is_ok(), "expected normal origin/main transport to pass, got: {result:?}");
     }
 
     fn initialize_repo(repo_root: &Path) {
