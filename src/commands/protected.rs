@@ -201,24 +201,6 @@ pub fn print_decision_findings(decision: &PolicyDecision) {
     }
 }
 
-/// Prints a shorter finding breakdown for interactive terminal flows.
-pub fn print_compact_decision_findings(decision: &PolicyDecision) {
-    if !decision.blocking_findings.is_empty() {
-        println!("  blocking findings:");
-        print_compact_finding_group(&decision.blocking_findings);
-    }
-
-    if decision.has_warnings() {
-        println!("  warnings:");
-        print_compact_finding_group(&decision.warning_findings);
-    }
-
-    if !decision.overridden_findings.is_empty() {
-        println!("  applied overrides:");
-        print_compact_overridden_group(&decision.overridden_findings);
-    }
-}
-
 /// Prints the effective scan scope, including repo-local exclusions.
 pub fn print_scan_scope(report: &ScanReport, context: &ExecutionContext) {
     println!("  candidate files discovered: {}", report.discovered_files);
@@ -342,20 +324,6 @@ fn print_finding_group(findings: &[PolicyFinding]) {
     }
 }
 
-fn print_compact_finding_group(findings: &[PolicyFinding]) {
-    for policy_finding in findings {
-        let finding = &policy_finding.finding;
-        println!(
-            "    - [{}|{}|{}] {}",
-            finding.severity, finding.confidence, finding.category, finding.title
-        );
-        println!("      location: {}", finding.location());
-        println!("      detail: {}", finding.detail);
-        println!("      remediation: {}", finding.remediation);
-        println!("      policy: {}", policy_finding.rationale);
-    }
-}
-
 fn print_overridden_group(findings: &[OverriddenFinding]) {
     for overridden in findings {
         println!(
@@ -384,22 +352,6 @@ fn print_overridden_group(findings: &[OverriddenFinding]) {
         if let Some(key_id) = &overridden.receipt.key_id {
             println!("      key_id: {}", key_id);
         }
-        println!("      expires_on: {}", overridden.receipt.expires_on);
-        println!("      reason: {}", overridden.receipt.reason);
-    }
-}
-
-fn print_compact_overridden_group(findings: &[OverriddenFinding]) {
-    for overridden in findings {
-        println!(
-            "    - [{}|{}|{}] {}",
-            overridden.finding.severity,
-            overridden.finding.confidence,
-            overridden.finding.category,
-            overridden.finding.title
-        );
-        println!("      location: {}", overridden.finding.location());
-        println!("      receipt: {}", overridden.receipt.path.display());
         println!("      expires_on: {}", overridden.receipt.expires_on);
         println!("      reason: {}", overridden.receipt.reason);
     }

@@ -16,6 +16,11 @@ It exists to answer three questions clearly:
 This document is narrower. It is the operational inventory and coverage matrix
 for the current scanner set.
 
+For interactive terminal use, `wolf push` now also renders live per-scanner and
+per-file progress plus compact blocker and warning summaries. That operator UX
+is part of the current protected-push surface and should evolve alongside the
+engine paths that produce those decisions.
+
 For tooling that should not scrape Markdown, the same inventory is mirrored in
 machine-readable form at `docs/security/scanner-inventory.json`.
 

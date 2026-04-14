@@ -448,6 +448,10 @@ immediately before transport.
 These checks are about protecting the authority boundary around Wolfence, not
 about application code alone.
 
+On interactive terminals, `wolf push` also renders live scanner and file
+progress plus compact blocker and warning summaries so operators can understand
+what the local gate is evaluating without reading a full structured report.
+
 ## Confidence Philosophy
 
 The scanner intentionally separates:

@@ -23,6 +23,7 @@ use serde::Serialize;
 
 use crate::app::AppResult;
 use crate::core::audit::{self, AuditEvent, AuditSource};
+use crate::core::policy::{OverriddenFinding, PolicyDecision, PolicyFinding};
 use crate::core::git;
 use crate::core::policy::Verdict;
 
@@ -432,7 +433,7 @@ fn run_internal(json: bool) -> AppResult<ExitCode> {
                 if matches!(decision.verdict, Verdict::Allow | Verdict::Warn)
                     && (decision.has_warnings() || !decision.overridden_findings.is_empty())
                 {
-                    protected::print_compact_decision_findings(&decision);
+                    print_tty_decision_findings(&decision);
                 }
             } else {
                 println!("Wolfence push");
@@ -471,7 +472,7 @@ fn run_internal(json: bool) -> AppResult<ExitCode> {
                 Verdict::Allow | Verdict::Warn => {
                     if dry_run_enabled() {
                         if tty.is_some() {
-                            println!("  result: policy allowed the push, but git push was skipped because WOLFENCE_DRY_RUN=1");
+                            print_tty_result_line("dry run", true);
                         } else {
                             println!("  result: policy allowed the push, but git push was skipped because WOLFENCE_DRY_RUN=1");
                         }
@@ -508,9 +509,7 @@ fn run_internal(json: bool) -> AppResult<ExitCode> {
                             },
                         )?;
                         if let Some(tty) = tty.as_mut() {
-                            tty.finish_transport_line(
-                                "Policy allowed the push, but the outbound snapshot changed before transport.",
-                            );
+                            tty.finish_transport_line("snapshot changed");
                             println!("  git: {detail}");
                         } else {
                             println!("  result: policy allowed the push, but the outbound snapshot changed before transport");
@@ -557,7 +556,7 @@ fn run_internal(json: bool) -> AppResult<ExitCode> {
                                 },
                             )?;
                             if let Some(tty) = tty.as_mut() {
-                                tty.finish_transport_line("Push completed.");
+                                tty.finish_transport_line("push completed");
                             } else {
                                 println!("  result: git push completed");
                             }
@@ -588,9 +587,7 @@ fn run_internal(json: bool) -> AppResult<ExitCode> {
                                 },
                             )?;
                             if let Some(tty) = tty.as_mut() {
-                                tty.finish_transport_line(
-                                    "Policy allowed the push, but git push failed.",
-                                );
+                                tty.finish_transport_line("push failed");
                                 println!("  git: {detail}");
                             } else {
                                 println!("  result: policy allowed the push, but git push failed");
@@ -602,9 +599,9 @@ fn run_internal(json: bool) -> AppResult<ExitCode> {
                 }
                 Verdict::Block => {
                     if let Some(_tty) = tty.as_mut() {
-                        println!("  result: push blocked by current policy");
                         protected::print_receipt_issues(&context.receipts.issues);
-                        protected::print_compact_decision_findings(&decision);
+                        print_tty_decision_findings(&decision);
+                        print_tty_result_line("blocked", false);
                     } else {
                         println!("  push blocked by current policy");
                     }
@@ -840,14 +837,6 @@ impl TtyPushUi {
             report.finding_baseline.accepted_findings,
             report.finding_baseline.unaccepted_findings
         );
-        println!(
-            "  verdict: {}",
-            match decision.verdict {
-                Verdict::Allow => "allow",
-                Verdict::Warn => "warn",
-                Verdict::Block => "block",
-            }
-        );
     }
 
     fn start_transport(&mut self, message: &str) {
@@ -861,7 +850,8 @@ impl TtyPushUi {
         if let Some(mut spinner) = self.spinner.take() {
             spinner.stop();
         }
-        println!("  result: {message}");
+        let success = message.eq("push completed");
+        print_tty_result_line(message, success);
     }
 
     fn echo_progress_line(&mut self, message: String) {
@@ -894,6 +884,90 @@ fn display_scan_file(path: &Path) -> String {
 
     let suffix_len = MAX_LEN.saturating_sub(3);
     format!("...{}", &text[text.len() - suffix_len..])
+}
+
+fn print_tty_decision_findings(decision: &PolicyDecision) {
+    if !decision.blocking_findings.is_empty() {
+        println!("  BLOCKERS:");
+        print_tty_policy_finding_group(&decision.blocking_findings);
+    }
+
+    if decision.has_warnings() {
+        println!("  warnings:");
+        print_tty_policy_finding_group(&decision.warning_findings);
+    }
+
+    if !decision.overridden_findings.is_empty() {
+        println!("  applied overrides:");
+        print_tty_overridden_group(&decision.overridden_findings);
+    }
+}
+
+fn print_tty_policy_finding_group(findings: &[PolicyFinding]) {
+    for policy_finding in findings {
+        let finding = &policy_finding.finding;
+        println!(
+            "    {} - {} - {}",
+            tty_finding_label(finding.severity),
+            finding.location(),
+            finding.title
+        );
+    }
+}
+
+fn print_tty_overridden_group(findings: &[OverriddenFinding]) {
+    for overridden in findings {
+        let finding = &overridden.finding;
+        println!(
+            "    {} - {} - {}",
+            tty_finding_label(finding.severity),
+            finding.location(),
+            finding.title
+        );
+    }
+}
+
+fn print_tty_result_line(message: &str, success: bool) {
+    let rendered = style_token(
+        &message.to_ascii_uppercase(),
+        if success { "\x1b[32m" } else { "\x1b[31m" },
+    );
+    println!("  {rendered}");
+}
+
+fn tty_finding_label(severity: crate::core::findings::Severity) -> String {
+    let token = match severity {
+        crate::core::findings::Severity::Info => "info",
+        crate::core::findings::Severity::Low => "low risk",
+        crate::core::findings::Severity::Medium => "medium risk",
+        crate::core::findings::Severity::High => "high risk",
+        crate::core::findings::Severity::Critical => "critical",
+    };
+    let severity = style_token(token, severity_color(severity));
+    format!("[{severity}]")
+}
+
+fn severity_color(severity: crate::core::findings::Severity) -> &'static str {
+    match severity {
+        crate::core::findings::Severity::Medium => "\x1b[38;2;3;49;255m",
+        crate::core::findings::Severity::High | crate::core::findings::Severity::Critical => {
+            "\x1b[31m"
+        }
+        crate::core::findings::Severity::Low => "\x1b[33m",
+        crate::core::findings::Severity::Info => "\x1b[36m",
+    }
+}
+
+fn style_token(token: &str, color: &str) -> String {
+    if tty_colors_enabled() {
+        format!("{color}{token}\x1b[0m")
+    } else {
+        token.to_string()
+    }
+}
+
+fn tty_colors_enabled() -> bool {
+    io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none()
 }
 
 #[cfg(test)]

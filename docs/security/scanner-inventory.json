@@ -1,5 +1,11 @@
 {
   "version": 1,
+  "operator_experience": {
+    "interactive_push_tty": [
+      "live per-scanner and per-file progress during wolf push",
+      "compact blocker and warning summaries for operator review"
+    ]
+  },
   "scanners": [
     {
       "name": "secret-scanner",
