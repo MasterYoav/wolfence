@@ -17,4 +17,4 @@ mode = "standard"
 # Repository-relative paths or path prefixes to exclude from scanning.
 # Keep this narrow. It is meant for documentation examples, fixtures, or
 # generated artifacts that are not part of the real protected code path.
-ignore_paths = ["docs/"]
+ignore_paths = ["docs/", "fixtures/repos/"]
