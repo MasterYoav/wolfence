@@ -9,7 +9,14 @@
 //! limitations, but it no longer pretends that staged files are equivalent to
 //! outbound branch content.
 
+use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
+use std::thread;
+use std::time::Duration;
 
 use serde::Serialize;
 
@@ -19,7 +26,7 @@ use crate::core::git;
 use crate::core::policy::Verdict;
 
 use super::json::{path_strings, print_json, print_json_error};
-use super::protected::{self, PushEvaluation};
+use super::protected::{self, PushEvaluation, PushEvaluationProgress};
 
 pub fn run(json: bool) -> AppResult<ExitCode> {
     let result = run_internal(json);
@@ -62,7 +69,15 @@ struct JsonPushResponse {
 }
 
 fn run_internal(json: bool) -> AppResult<ExitCode> {
-    match protected::evaluate_push_action()? {
+    let interactive = interactive_output_enabled(json);
+    let mut tty = interactive.then(TtyPushUi::new);
+    let evaluation = if let Some(tty) = tty.as_mut() {
+        protected::evaluate_push_action_with_progress(|event| tty.handle_progress(event))?
+    } else {
+        protected::evaluate_push_action()?
+    };
+
+    match evaluation {
         PushEvaluation::NoCommits { context } => {
             audit::append_audit_event(
                 &context.repo_root,
@@ -106,11 +121,16 @@ fn run_internal(json: bool) -> AppResult<ExitCode> {
                 })?;
                 return Ok(ExitCode::FAILURE);
             }
-            println!("Wolfence push");
-            println!("  action: {}", context.action);
-            println!("  repo root: {}", context.repo_root.display());
-            println!("  status: no commits exist on the current branch");
-            println!("  result: nothing to push");
+            if let Some(tty) = tty.as_mut() {
+                tty.finish_scan_line("No commits exist on the current branch.");
+                println!("  result: nothing to push");
+            } else {
+                println!("Wolfence push");
+                println!("  action: {}", context.action);
+                println!("  repo root: {}", context.repo_root.display());
+                println!("  status: no commits exist on the current branch");
+                println!("  result: nothing to push");
+            }
             Ok(ExitCode::FAILURE)
         }
         PushEvaluation::UpToDate { context } => {
@@ -156,11 +176,16 @@ fn run_internal(json: bool) -> AppResult<ExitCode> {
                 })?;
                 return Ok(ExitCode::SUCCESS);
             }
-            println!("Wolfence push");
-            println!("  action: {}", context.action);
-            println!("  repo root: {}", context.repo_root.display());
-            println!("  status: branch is not ahead of its upstream");
-            println!("  result: nothing to push");
+            if let Some(tty) = tty.as_mut() {
+                tty.finish_scan_line("Branch is already up to date.");
+                println!("  result: nothing to push");
+            } else {
+                println!("Wolfence push");
+                println!("  action: {}", context.action);
+                println!("  repo root: {}", context.repo_root.display());
+                println!("  status: branch is not ahead of its upstream");
+                println!("  result: nothing to push");
+            }
             Ok(ExitCode::SUCCESS)
         }
         PushEvaluation::Ready {
@@ -394,44 +419,67 @@ fn run_internal(json: bool) -> AppResult<ExitCode> {
                 }
             }
 
-            println!("Wolfence push");
-            println!("  action: {}", context.action);
-            println!("  repo root: {}", context.repo_root.display());
-            println!(
-                "  mode: {} ({})",
-                context.config.mode, context.config.mode_source
-            );
-            println!("  branch: {}", current_branch);
-            println!(
-                "  upstream: {}",
-                upstream_branch
-                    .as_deref()
-                    .unwrap_or("<none: initial push mode>")
-            );
-            println!("  commits ahead: {}", commits_ahead);
-            protected::print_scan_scope(&report, &context);
-            println!("  findings: {}", report.findings.len());
-            protected::print_finding_summary(&report.findings);
-            protected::print_finding_history(&report);
-            protected::print_finding_baseline(&report);
-            println!("  warnings: {}", decision.warning_findings.len());
-            println!("  blocks: {}", decision.blocking_findings.len());
-            println!(
-                "  overrides applied: {}",
-                decision.overridden_findings.len()
-            );
-            println!("  receipt issues: {}", context.receipts.issues.len());
-            println!("  verdict: {}", decision.verdict);
-            protected::print_receipt_issues(&context.receipts.issues);
-            protected::print_decision_findings(&decision);
+            if let Some(tty) = tty.as_mut() {
+                tty.finish_scan_summary(
+                    &context,
+                    &report,
+                    &decision,
+                    &current_branch,
+                    upstream_branch.as_deref(),
+                    commits_ahead,
+                );
+                if matches!(decision.verdict, Verdict::Allow | Verdict::Warn)
+                    && (decision.has_warnings() || !decision.overridden_findings.is_empty())
+                {
+                    protected::print_compact_decision_findings(&decision);
+                }
+            } else {
+                println!("Wolfence push");
+                println!("  action: {}", context.action);
+                println!("  repo root: {}", context.repo_root.display());
+                println!(
+                    "  mode: {} ({})",
+                    context.config.mode, context.config.mode_source
+                );
+                println!("  branch: {}", current_branch);
+                println!(
+                    "  upstream: {}",
+                    upstream_branch
+                        .as_deref()
+                        .unwrap_or("<none: initial push mode>")
+                );
+                println!("  commits ahead: {}", commits_ahead);
+                protected::print_scan_scope(&report, &context);
+                println!("  findings: {}", report.findings.len());
+                protected::print_finding_summary(&report.findings);
+                protected::print_finding_history(&report);
+                protected::print_finding_baseline(&report);
+                println!("  warnings: {}", decision.warning_findings.len());
+                println!("  blocks: {}", decision.blocking_findings.len());
+                println!(
+                    "  overrides applied: {}",
+                    decision.overridden_findings.len()
+                );
+                println!("  receipt issues: {}", context.receipts.issues.len());
+                println!("  verdict: {}", decision.verdict);
+                protected::print_receipt_issues(&context.receipts.issues);
+                protected::print_decision_findings(&decision);
+            }
 
             match decision.verdict {
                 Verdict::Allow | Verdict::Warn => {
                     if dry_run_enabled() {
-                        println!("  result: policy allowed the push, but git push was skipped because WOLFENCE_DRY_RUN=1");
+                        if tty.is_some() {
+                            println!("  result: policy allowed the push, but git push was skipped because WOLFENCE_DRY_RUN=1");
+                        } else {
+                            println!("  result: policy allowed the push, but git push was skipped because WOLFENCE_DRY_RUN=1");
+                        }
                         return Ok(ExitCode::SUCCESS);
                     }
 
+                    if let Some(tty) = tty.as_mut() {
+                        tty.start_transport("Verifying outbound snapshot");
+                    }
                     if let Err(error) =
                         protected::verify_ready_push_snapshot(&context, &push_status)
                     {
@@ -458,11 +506,27 @@ fn run_internal(json: bool) -> AppResult<ExitCode> {
                                 commits_ahead: Some(commits_ahead),
                             },
                         )?;
-                        println!("  result: policy allowed the push, but the outbound snapshot changed before transport");
-                        println!("  git: {detail}");
+                        if let Some(tty) = tty.as_mut() {
+                            tty.finish_transport_line(
+                                "Policy allowed the push, but the outbound snapshot changed before transport.",
+                            );
+                            println!("  git: {detail}");
+                        } else {
+                            println!("  result: policy allowed the push, but the outbound snapshot changed before transport");
+                            println!("  git: {detail}");
+                        }
                         return Ok(ExitCode::FAILURE);
                     }
 
+                    if let Some(tty) = tty.as_mut() {
+                        tty.start_transport(&format!(
+                            "Pushing {} -> {}",
+                            current_branch,
+                            upstream_branch
+                                .as_deref()
+                                .unwrap_or("<initial push>")
+                        ));
+                    }
                     match git::push(
                         &context.repo_root,
                         &current_branch,
@@ -491,7 +555,11 @@ fn run_internal(json: bool) -> AppResult<ExitCode> {
                                     commits_ahead: Some(commits_ahead),
                                 },
                             )?;
-                            println!("  result: git push completed");
+                            if let Some(tty) = tty.as_mut() {
+                                tty.finish_transport_line("Push completed.");
+                            } else {
+                                println!("  result: git push completed");
+                            }
                             Ok(ExitCode::SUCCESS)
                         }
                         Err(error) => {
@@ -518,14 +586,27 @@ fn run_internal(json: bool) -> AppResult<ExitCode> {
                                     commits_ahead: Some(commits_ahead),
                                 },
                             )?;
-                            println!("  result: policy allowed the push, but git push failed");
-                            println!("  git: {detail}");
+                            if let Some(tty) = tty.as_mut() {
+                                tty.finish_transport_line(
+                                    "Policy allowed the push, but git push failed.",
+                                );
+                                println!("  git: {detail}");
+                            } else {
+                                println!("  result: policy allowed the push, but git push failed");
+                                println!("  git: {detail}");
+                            }
                             Ok(ExitCode::FAILURE)
                         }
                     }
                 }
                 Verdict::Block => {
-                    println!("  push blocked by current policy");
+                    if let Some(_tty) = tty.as_mut() {
+                        println!("  result: push blocked by current policy");
+                        protected::print_receipt_issues(&context.receipts.issues);
+                        protected::print_compact_decision_findings(&decision);
+                    } else {
+                        println!("  push blocked by current policy");
+                    }
                     Ok(ExitCode::FAILURE)
                 }
             }
@@ -533,11 +614,248 @@ fn run_internal(json: bool) -> AppResult<ExitCode> {
     }
 }
 
+fn interactive_output_enabled(json: bool) -> bool {
+    !json && io::stdout().is_terminal()
+}
+
 fn dry_run_enabled() -> bool {
     matches!(
         std::env::var("WOLFENCE_DRY_RUN").ok().as_deref(),
         Some("1" | "true" | "TRUE" | "yes" | "YES")
     )
+}
+
+struct SpinnerState {
+    message: String,
+}
+
+struct SpinnerHandle {
+    stop: Arc<AtomicBool>,
+    state: Arc<Mutex<SpinnerState>>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl SpinnerHandle {
+    fn start(initial_message: impl Into<String>) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let state = Arc::new(Mutex::new(SpinnerState {
+            message: initial_message.into(),
+        }));
+        let thread_stop = Arc::clone(&stop);
+        let thread_state = Arc::clone(&state);
+
+        let thread = thread::spawn(move || {
+            let frames = ['-', '\\', '|', '/'];
+            let mut frame_index = 0usize;
+            let mut last_width = 0usize;
+
+            while !thread_stop.load(Ordering::Relaxed) {
+                let message = thread_state
+                    .lock()
+                    .map(|state| state.message.clone())
+                    .unwrap_or_else(|_| "Working".to_string());
+                let rendered = format!("  {} {}", frames[frame_index], message);
+                let padding = " ".repeat(last_width.saturating_sub(rendered.len()));
+                print!("\r{rendered}{padding}");
+                let _ = io::stdout().flush();
+                last_width = rendered.len();
+                frame_index = (frame_index + 1) % frames.len();
+                thread::sleep(Duration::from_millis(90));
+            }
+
+            let clear = " ".repeat(last_width);
+            print!("\r{clear}\r");
+            let _ = io::stdout().flush();
+        });
+
+        Self {
+            stop,
+            state,
+            thread: Some(thread),
+        }
+    }
+
+    fn update(&self, message: impl Into<String>) {
+        if let Ok(mut state) = self.state.lock() {
+            state.message = message.into();
+        }
+    }
+
+    fn stop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Drop for SpinnerHandle {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+struct TtyPushUi {
+    spinner: Option<SpinnerHandle>,
+}
+
+impl TtyPushUi {
+    fn new() -> Self {
+        Self {
+            spinner: Some(SpinnerHandle::start("Preparing outbound push snapshot")),
+        }
+    }
+
+    fn handle_progress(&mut self, progress: PushEvaluationProgress) {
+        let Some(spinner) = self.spinner.as_ref() else {
+            return;
+        };
+
+        match progress {
+            PushEvaluationProgress::SnapshotLoaded {
+                discovered_files,
+                scanned_files,
+                ignored_files,
+                ..
+            } => {
+                spinner.update(format!(
+                    "Found {discovered_files} outbound files, checking {scanned_files} in scope, ignoring {ignored_files}"
+                ));
+            }
+            PushEvaluationProgress::ScannerStarted { name, index, total } => {
+                spinner.update(format!(
+                    "{} ({index}/{total})",
+                    scanner_progress_label(name)
+                ));
+            }
+            PushEvaluationProgress::ScannerFinished {
+                name,
+                index,
+                total,
+                findings,
+            } => {
+                let finding_note = if findings == 0 {
+                    "no new findings".to_string()
+                } else if findings == 1 {
+                    "1 finding".to_string()
+                } else {
+                    format!("{findings} findings")
+                };
+                spinner.update(format!(
+                    "{} ({index}/{total}, {finding_note})",
+                    scanner_progress_label(name)
+                ));
+            }
+            PushEvaluationProgress::GovernanceCheck => {
+                spinner.update("Checking live repository governance");
+            }
+            PushEvaluationProgress::FindingHistory => {
+                spinner.update("Comparing findings against recent history");
+            }
+            PushEvaluationProgress::FindingBaseline => {
+                spinner.update("Comparing findings against the accepted baseline");
+            }
+            PushEvaluationProgress::PolicyEvaluation => {
+                spinner.update("Applying local push policy");
+            }
+        }
+    }
+
+    fn finish_scan_line(&mut self, message: &str) {
+        if let Some(mut spinner) = self.spinner.take() {
+            spinner.stop();
+        }
+        println!("Wolfence push");
+        println!("  {message}");
+    }
+
+    fn finish_scan_summary(
+        &mut self,
+        context: &crate::core::context::ExecutionContext,
+        report: &crate::core::orchestrator::ScanReport,
+        decision: &crate::core::policy::PolicyDecision,
+        current_branch: &str,
+        upstream_branch: Option<&str>,
+        commits_ahead: usize,
+    ) {
+        if let Some(mut spinner) = self.spinner.take() {
+            spinner.stop();
+        }
+
+        println!("Wolfence push");
+        println!(
+            "  branch: {} -> {}",
+            current_branch,
+            upstream_branch.unwrap_or("<initial push>")
+        );
+        println!(
+            "  mode: {} ({})",
+            context.config.mode, context.config.mode_source
+        );
+        println!(
+            "  scope: {} commits ahead, {} files checked, {} ignored, {} discovered",
+            commits_ahead, report.scanned_files, report.ignored_files, report.discovered_files
+        );
+        if !context.config.scan_ignore_paths.is_empty() {
+            println!(
+                "  repo exclusions: {}",
+                context.config.scan_ignore_paths.join(", ")
+            );
+        }
+        println!(
+            "  checks: {} scanners, {} findings, {} warnings, {} blocks",
+            report.scanners_run,
+            report.findings.len(),
+            decision.warning_findings.len(),
+            decision.blocking_findings.len()
+        );
+        if !report.findings.is_empty() {
+            protected::print_finding_summary(&report.findings);
+        }
+        println!(
+            "  history: {} new, {} recurring",
+            report.finding_history.new_findings, report.finding_history.recurring_findings
+        );
+        println!(
+            "  baseline: {} accepted, {} not accepted",
+            report.finding_baseline.accepted_findings,
+            report.finding_baseline.unaccepted_findings
+        );
+        println!(
+            "  verdict: {}",
+            match decision.verdict {
+                Verdict::Allow => "allow",
+                Verdict::Warn => "warn",
+                Verdict::Block => "block",
+            }
+        );
+    }
+
+    fn start_transport(&mut self, message: &str) {
+        if let Some(mut spinner) = self.spinner.take() {
+            spinner.stop();
+        }
+        self.spinner = Some(SpinnerHandle::start(message.to_string()));
+    }
+
+    fn finish_transport_line(&mut self, message: &str) {
+        if let Some(mut spinner) = self.spinner.take() {
+            spinner.stop();
+        }
+        println!("  result: {message}");
+    }
+}
+
+fn scanner_progress_label(name: &str) -> &'static str {
+    match name {
+        "secret-scanner" => "Checking secrets",
+        "basic-sast" => "Checking risky code patterns",
+        "artifact-scanner" => "Inspecting generated and packaged artifacts",
+        "dependency-scanner" => "Checking dependency and provenance risks",
+        "config-scanner" => "Checking infrastructure and workflow config",
+        "policy-scanner" => "Checking Wolfence policy integrity",
+        _ => "Running scanner",
+    }
 }
 
 #[cfg(test)]

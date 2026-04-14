@@ -11,7 +11,7 @@ use crate::core::finding_history;
 use crate::core::findings::{Finding, FindingCategory, Severity};
 use crate::core::git::{self, PushStatus};
 use crate::core::github_governance;
-use crate::core::orchestrator::{Orchestrator, ScanReport};
+use crate::core::orchestrator::{Orchestrator, ScanProgress, ScanReport};
 use crate::core::policy::{OverriddenFinding, PolicyDecision, PolicyFinding};
 use crate::core::receipts::ReceiptIssue;
 
@@ -37,8 +37,44 @@ pub enum PushEvaluation {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PushEvaluationProgress {
+    SnapshotLoaded {
+        current_branch: String,
+        upstream_branch: Option<String>,
+        commits_ahead: usize,
+        discovered_files: usize,
+        scanned_files: usize,
+        ignored_files: usize,
+    },
+    ScannerStarted {
+        name: &'static str,
+        index: usize,
+        total: usize,
+    },
+    ScannerFinished {
+        name: &'static str,
+        index: usize,
+        total: usize,
+        findings: usize,
+    },
+    GovernanceCheck,
+    FindingHistory,
+    FindingBaseline,
+    PolicyEvaluation,
+}
+
 /// Evaluates the real outbound content of a protected push.
 pub fn evaluate_push_action() -> AppResult<PushEvaluation> {
+    evaluate_push_action_with_progress(|_| {})
+}
+
+/// Evaluates the real outbound content of a protected push and emits progress
+/// events that terminal UIs can render in real time.
+pub fn evaluate_push_action_with_progress<F>(mut on_progress: F) -> AppResult<PushEvaluation>
+where
+    F: FnMut(PushEvaluationProgress),
+{
     let context = ExecutionContext::load(ProtectedAction::Push)?;
     let Some(push_status) = context.push_status.clone() else {
         return Ok(PushEvaluation::UpToDate { context });
@@ -53,14 +89,46 @@ pub fn evaluate_push_action() -> AppResult<PushEvaluation> {
             commits_ahead,
             ..
         } => {
-            let mut report = Orchestrator::default().run(&context)?;
+            on_progress(PushEvaluationProgress::SnapshotLoaded {
+                current_branch: current_branch.clone(),
+                upstream_branch: upstream_branch.clone(),
+                commits_ahead: *commits_ahead,
+                discovered_files: context.discovered_candidate_files,
+                scanned_files: context.candidate_files.len(),
+                ignored_files: context.ignored_candidate_files.len(),
+            });
+
+            let mut report = Orchestrator::default().run_with_progress(&context, |event| {
+                match event {
+                    ScanProgress::ScannerStarted { name, index, total } => {
+                        on_progress(PushEvaluationProgress::ScannerStarted { name, index, total });
+                    }
+                    ScanProgress::ScannerFinished {
+                        name,
+                        index,
+                        total,
+                        findings,
+                    } => {
+                        on_progress(PushEvaluationProgress::ScannerFinished {
+                            name,
+                            index,
+                            total,
+                            findings,
+                        });
+                    }
+                }
+            })?;
+            on_progress(PushEvaluationProgress::GovernanceCheck);
             inject_live_github_governance(&context, &mut report)?;
+            on_progress(PushEvaluationProgress::FindingHistory);
             let history =
                 finding_history::annotate_findings(&context.repo_root, &mut report.findings);
             report.set_finding_history(history);
+            on_progress(PushEvaluationProgress::FindingBaseline);
             let baseline =
                 finding_baseline::annotate_findings(&context.repo_root, &mut report.findings);
             report.set_finding_baseline(baseline);
+            on_progress(PushEvaluationProgress::PolicyEvaluation);
             let decision = report.evaluate(context.config.mode, &context.receipts, context.action);
 
             Ok(PushEvaluation::Ready {
@@ -111,6 +179,24 @@ pub fn print_decision_findings(decision: &PolicyDecision) {
     if !decision.overridden_findings.is_empty() {
         println!("  applied overrides:");
         print_overridden_group(&decision.overridden_findings);
+    }
+}
+
+/// Prints a shorter finding breakdown for interactive terminal flows.
+pub fn print_compact_decision_findings(decision: &PolicyDecision) {
+    if !decision.blocking_findings.is_empty() {
+        println!("  blocking findings:");
+        print_compact_finding_group(&decision.blocking_findings);
+    }
+
+    if decision.has_warnings() {
+        println!("  warnings:");
+        print_compact_finding_group(&decision.warning_findings);
+    }
+
+    if !decision.overridden_findings.is_empty() {
+        println!("  applied overrides:");
+        print_compact_overridden_group(&decision.overridden_findings);
     }
 }
 
@@ -237,6 +323,20 @@ fn print_finding_group(findings: &[PolicyFinding]) {
     }
 }
 
+fn print_compact_finding_group(findings: &[PolicyFinding]) {
+    for policy_finding in findings {
+        let finding = &policy_finding.finding;
+        println!(
+            "    - [{}|{}|{}] {}",
+            finding.severity, finding.confidence, finding.category, finding.title
+        );
+        println!("      location: {}", finding.location());
+        println!("      detail: {}", finding.detail);
+        println!("      remediation: {}", finding.remediation);
+        println!("      policy: {}", policy_finding.rationale);
+    }
+}
+
 fn print_overridden_group(findings: &[OverriddenFinding]) {
     for overridden in findings {
         println!(
@@ -265,6 +365,22 @@ fn print_overridden_group(findings: &[OverriddenFinding]) {
         if let Some(key_id) = &overridden.receipt.key_id {
             println!("      key_id: {}", key_id);
         }
+        println!("      expires_on: {}", overridden.receipt.expires_on);
+        println!("      reason: {}", overridden.receipt.reason);
+    }
+}
+
+fn print_compact_overridden_group(findings: &[OverriddenFinding]) {
+    for overridden in findings {
+        println!(
+            "    - [{}|{}|{}] {}",
+            overridden.finding.severity,
+            overridden.finding.confidence,
+            overridden.finding.category,
+            overridden.finding.title
+        );
+        println!("      location: {}", overridden.finding.location());
+        println!("      receipt: {}", overridden.receipt.path.display());
         println!("      expires_on: {}", overridden.receipt.expires_on);
         println!("      reason: {}", overridden.receipt.reason);
     }

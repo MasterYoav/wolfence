@@ -18,6 +18,21 @@ use super::scanners::{
     SecretScanner,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanProgress {
+    ScannerStarted {
+        name: &'static str,
+        index: usize,
+        total: usize,
+    },
+    ScannerFinished {
+        name: &'static str,
+        index: usize,
+        total: usize,
+        findings: usize,
+    },
+}
+
 /// Final scan output for one invocation.
 #[derive(Debug, Clone, Serialize)]
 pub struct ScanReport {
@@ -69,10 +84,37 @@ impl Default for Orchestrator {
 impl Orchestrator {
     /// Runs every configured scanner against one execution context.
     pub fn run(&self, context: &ExecutionContext) -> AppResult<ScanReport> {
-        let mut findings = Vec::new();
+        self.run_with_progress(context, |_| {})
+    }
 
-        for scanner in &self.scanners {
+    /// Runs every configured scanner against one execution context and emits
+    /// progress events before and after each scanner.
+    pub fn run_with_progress<F>(
+        &self,
+        context: &ExecutionContext,
+        mut on_progress: F,
+    ) -> AppResult<ScanReport>
+    where
+        F: FnMut(ScanProgress),
+    {
+        let mut findings = Vec::new();
+        let total = self.scanners.len();
+
+        for (index, scanner) in self.scanners.iter().enumerate() {
+            let index = index + 1;
+            on_progress(ScanProgress::ScannerStarted {
+                name: scanner.name(),
+                index,
+                total,
+            });
+            let findings_before = findings.len();
             findings.extend(scanner.scan(context)?);
+            on_progress(ScanProgress::ScannerFinished {
+                name: scanner.name(),
+                index,
+                total,
+                findings: findings.len().saturating_sub(findings_before),
+            });
         }
 
         normalize_findings(&mut findings);
