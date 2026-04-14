@@ -1,0 +1,43 @@
+{
+  "prepare": "commit",
+  "upstream_fixture": "__upstream__",
+  "expectations": {
+    "push": {
+      "verdict": "block",
+      "finding_ids": [
+        "config.github-actions.branch-push-publish",
+        "config.github-actions.publish-without-provenance",
+        "config.github-governance.ruleset-not-active",
+        "config.github-governance.ruleset-bypass",
+        "config.github-governance.ruleset-non-fast-forward-disabled"
+      ],
+      "not_finding_ids": [
+        "policy.repo.codeowners.uncovered-sensitive-path",
+        "policy.repo.codeowners.missing"
+      ],
+      "json": {
+        "status": "ready",
+        "result": "blocked",
+        "has_report": true,
+        "has_decision": true,
+        "has_finding_history": true,
+        "has_finding_baseline": true,
+        "receipt_issue_count": 0,
+        "receipt_overrides_applied": 0
+      },
+      "audit": {
+        "entries": 1,
+        "healthy": true,
+        "outcomes": [
+          "blocked"
+        ],
+        "overrides_applied": [
+          0
+        ],
+        "receipt_issues": [
+          0
+        ]
+      }
+    }
+  }
+}

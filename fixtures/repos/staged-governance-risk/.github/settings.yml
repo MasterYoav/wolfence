@@ -1,0 +1,10 @@
+branches:
+  - name: main
+    protection:
+      enforce_admins: false
+      required_pull_request_reviews:
+        required_approving_review_count: 0
+        dismiss_stale_reviews: false
+        require_code_owner_reviews: false
+      allow_force_pushes: true
+      allow_deletions: true

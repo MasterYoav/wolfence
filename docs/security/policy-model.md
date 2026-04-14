@@ -74,6 +74,8 @@ It blocks:
 - all `high` and `critical` findings
 - `medium` findings when confidence is `high` and the category is not
   `vulnerability`
+- declared internal package ownership drift and direct-source bypass findings,
+  even if a scanner later reports them below `medium`
 
 It warns on:
 
@@ -82,7 +84,10 @@ It warns on:
   block
 
 This means medium-confidence SAST heuristics still surface, but a high-signal
-dependency provenance or policy failure can block even at `medium`.
+dependency provenance or policy failure can block even at `medium`. It also
+means Wolfence treats explicit private-package ownership drift more strictly
+than generic custom-source posture warnings, because those findings violate a
+declared provenance policy instead of merely signaling ambiguous risk.
 
 ### `strict`
 
@@ -93,6 +98,8 @@ It blocks:
 - all `medium`, `high`, and `critical` findings
 - `low` findings when confidence is `high` and the category is not
   `vulnerability`
+- declared internal package ownership drift and direct-source bypass findings
+  as hard provenance failures regardless of their coarse severity
 
 It warns on:
 

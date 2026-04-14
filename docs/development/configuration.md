@@ -22,6 +22,10 @@ Policy-related settings for this repository.
 
 Scanner scope controls for this repository.
 
+### `[dependency]`
+
+Dependency provenance ownership hints for this repository.
+
 ### `mode`
 
 Supported values:
@@ -61,6 +65,111 @@ count so the reduced scan surface is explicit at runtime.
 `wolf doctor` also warns if exclusions cover higher-risk paths such as
 `src/`, `.github/`, lockfiles, manifests, or Wolfence policy directories.
 
+### `node_internal_packages`
+
+Unscoped internal Node package names that are expected to resolve through the
+repository's private registry configuration.
+
+Use this only when the repository intentionally mixes custom registry config
+with unscoped internal package names. Wolfence uses this list to suppress the
+dependency-confusion posture finding for those specific names.
+
+Example:
+
+```toml
+[dependency]
+node_internal_packages = ["internal-sdk", "platform-core"]
+```
+
+### `node_internal_package_prefixes`
+
+Package-name prefixes that are expected to belong to internal unscoped Node
+packages resolved through the repository's private registry configuration.
+
+Use this when internal packages follow a stable naming convention and a flat
+per-package allowlist would be too brittle.
+
+Example:
+
+```toml
+[dependency]
+node_internal_package_prefixes = ["platform-", "corp-"]
+```
+
+### `node_registry_ownership`
+
+Owner-host rules for internal Node packages.
+
+Each entry uses one of these forms:
+
+- `packages.example.com=internal-sdk`
+- `packages.example.com=platform-*`
+
+Use this when you want Wolfence to verify that a declared internal package or
+package prefix actually maps to the expected tracked private registry host,
+both in tracked registry config, in supported changed lockfiles
+(`package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`, and
+`yarn.lock`), and in direct remote `package.json` dependency specs, instead of
+only suppressing ambiguity heuristics.
+
+### `ruby_source_ownership`
+
+Owner-host rules for internal Ruby gems.
+
+Each entry uses one of these forms:
+
+- `gems.example.com=internal-sdk`
+- `gems.example.com=corp-*`
+
+Use this when you want Wolfence to verify that internal gems are backed by the
+expected Ruby source host, both in direct-source `Gemfile` or `gems.rb`
+entries and in Bundler lockfiles (`Gemfile.lock` or `gems.locked`).
+
+### `python_internal_packages`
+
+Internal Python package names that are expected to resolve through custom
+package indexes declared in tracked requirements files.
+
+Use this only for private package names the repository explicitly owns.
+Wolfence uses this list to suppress the dependency-confusion posture finding
+for those specific names.
+
+Example:
+
+```toml
+[dependency]
+python_internal_packages = ["internal-sdk", "corp-utils"]
+```
+
+### `python_internal_package_prefixes`
+
+Package-name prefixes that are expected to belong to internal Python packages
+resolved through custom package indexes declared in tracked requirements files.
+
+Use this when internal Python packages share an organizational naming prefix.
+
+Example:
+
+```toml
+[dependency]
+python_internal_package_prefixes = ["corp-", "internal-"]
+```
+
+### `python_index_ownership`
+
+Owner-host rules for internal Python packages.
+
+Each entry uses one of these forms:
+
+- `packages.example.com=internal-sdk`
+- `packages.example.com=corp-*`
+
+Use this when you want Wolfence to verify that internal Python packages are
+backed by the expected tracked package-index host, both in tracked package
+index config, in supported changed lockfiles (`poetry.lock`, `uv.lock`, and
+`Pipfile.lock` when index sources are available), and in direct remote
+`pyproject.toml`, `Pipfile`, or `requirements*.txt` dependency references.
+
 ## Precedence
 
 The effective mode is resolved in this order:
@@ -92,6 +201,27 @@ Supported values:
 - `auto`: try live advisory lookups, but do not fail the push if OSV or network access is unavailable
 - `require`: treat live advisory availability as part of the protected push path and emit a finding if the lookup cannot run
 
+### `WOLFENCE_GITHUB_GOVERNANCE`
+
+Controls optional live GitHub governance verification during `wolf doctor` and
+protected push.
+
+Supported values:
+
+- `off`: disable live GitHub governance verification
+- `auto`: try the live verification with `gh api`; `doctor` stays best-effort on availability, but protected push still blocks if live GitHub state drifts from repo-as-code governance intent
+- `require`: treat live verification availability as part of both doctor's trust posture and the protected push path, so verification failures become blocking
+
+This verification compares repo-as-code governance intent from local files such
+as `.github/settings.yml`, `.github/repository.yml`, and `.github/rulesets/*`
+against live GitHub state across locally declared governed branches, with the
+repository default branch used as a fallback when no explicit branch list is
+present in repo-admin settings.
+
+When protected push blocks on live GitHub governance drift, Wolfence emits a
+stable `policy` finding fingerprint. That means the only bypass path is an
+explicit override receipt for that exact live drift state.
+
 ## Initialization
 
 Create the baseline config with:
@@ -105,6 +235,12 @@ Then inspect the effective resolved config with:
 ```bash
 cargo run -- config
 ```
+
+That output now includes the effective `scan ignore paths`,
+`dependency node internal packages`, `dependency node internal package prefixes`,
+`dependency node registry ownership rules`, `dependency python internal packages`,
+`dependency python internal package prefixes`, and `dependency python index ownership rules`
+so repo-local ownership hints stay visible during review.
 
 Audit the local enforcement posture with:
 
@@ -218,6 +354,8 @@ artifact.
 - whether `.wolfence/trust/*.pem` is trackable by Git
 - how many active trust keys are category-scoped versus unrestricted
 - whether the current mode is actually enforcing
+- whether live GitHub governance verification is enabled and whether GitHub CLI is available
+- whether repo-as-code governance intent matches live GitHub branch protection and rulesets when that verification is enabled
 - whether shell overrides are changing behavior
 - whether live OSV advisories are enabled and whether `curl` is available
 - whether `openssl` is available for signed receipt verification

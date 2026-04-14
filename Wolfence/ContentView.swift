@@ -1,12 +1,15 @@
 import AppKit
 import Observation
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @AppStorage("workspaceRepositoryPaths") private var workspaceRepositoryPaths = "[]"
     @AppStorage("selectedRepositoryPath") private var selectedRepositoryPath = ""
+    @AppStorage("workspaceRepositoryIcons") private var workspaceRepositoryIcons = "{}"
     @AppStorage("sidebarCollapsed") private var sidebarCollapsed = false
     @State private var workspace = WorkspaceStore()
+    @State private var iconEditorRepositoryID: String?
     private let shouldRestoreSelection: Bool
 
     @MainActor
@@ -32,6 +35,32 @@ struct ContentView: View {
         sidebarCollapsed ? 92 : 248
     }
 
+    private var sidebarSectionPadding: CGFloat {
+        sidebarCollapsed ? 0 : 12
+    }
+
+    private var sidebarToggleCollapsedLeadingOffset: CGFloat {
+        18
+    }
+
+    private var sidebarToggleExpandedTrailingOffset: CGFloat {
+        44
+    }
+
+    private var sidebarToggleLeadingInset: CGFloat {
+        sidebarCollapsed
+            ? sidebarWidth + sidebarToggleCollapsedLeadingOffset
+            : sidebarWidth - sidebarToggleExpandedTrailingOffset
+    }
+
+    private var sidebarToggleTopInset: CGFloat {
+        -20
+    }
+
+    private var collapsedHeaderLeadingInset: CGFloat {
+        40
+    }
+
     var body: some View {
         ZStack {
             WolfenceTheme.windowBackground
@@ -51,6 +80,27 @@ struct ContentView: View {
         .task {
             guard shouldRestoreSelection else { return }
             await restoreWorkspaceIfNeeded()
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { iconEditorRepositoryID != nil },
+                set: { if !$0 { iconEditorRepositoryID = nil } }
+            )
+        ) {
+            if let repositoryID = iconEditorRepositoryID,
+               let repository = workspace.repositories.first(where: { $0.id == repositoryID }) {
+                RepositoryIconEditorSheet(
+                    repository: repository,
+                    onSave: { customization in
+                        workspace.updateRepositoryIcon(id: repositoryID, customization: customization)
+                        persistWorkspace()
+                        iconEditorRepositoryID = nil
+                    },
+                    onCancel: {
+                        iconEditorRepositoryID = nil
+                    }
+                )
+            }
         }
     }
 
@@ -77,8 +127,7 @@ struct ContentView: View {
                 Button("Add Repository") {
                     addRepositoryFromPanel()
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(WolfenceTheme.action)
+                .buttonStyle(WolfenceActionButtonStyle(tone: WolfenceTheme.action, prominence: .primary))
 
                 Text("Start by adding one or more repositories. Each sidebar item becomes a full Wolfence console.")
                     .font(.system(size: 13, weight: .medium, design: .rounded))
@@ -103,29 +152,35 @@ struct ContentView: View {
             Divider()
                 .overlay(WolfenceTheme.rule)
                 .opacity(sidebarCollapsed ? 0.45 : 1)
+                .animation(.snappy(duration: 0.18, extraBounce: 0), value: sidebarCollapsed)
 
             VStack(spacing: 0) {
                 windowChrome
                 detailArea
+                    .transaction { transaction in
+                        transaction.animation = nil
+                    }
             }
         }
         .background(WolfenceTheme.surface.opacity(0.45))
         .clipShape(RoundedRectangle(cornerRadius: 0))
-        .animation(.spring(response: 0.32, dampingFraction: 0.84), value: sidebarCollapsed)
         .ignoresSafeArea(edges: .top)
+        .overlay(alignment: .topLeading) {
+            sidebarToggleButton
+                .offset(x: sidebarToggleLeadingInset, y: sidebarToggleTopInset)
+                .animation(.snappy(duration: 0.18, extraBounce: 0), value: sidebarCollapsed)
+        }
     }
 
     private var windowChrome: some View {
         HStack(spacing: 18) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(activeRepository?.displayTitle ?? "Workspace")
-                    .font(.system(size: 24, weight: .regular, design: .serif))
-                    .foregroundStyle(WolfenceTheme.primaryInk)
-
-                Text("Wolfence security workspace")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(WolfenceTheme.mutedInk)
-                    .textCase(.uppercase)
+            if sidebarCollapsed {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(activeRepository?.displayTitle ?? "Workspace")
+                        .font(.system(size: 24, weight: .regular, design: .serif))
+                        .foregroundStyle(WolfenceTheme.primaryInk)
+                }
+                .padding(.leading, collapsedHeaderLeadingInset)
             }
 
             Spacer(minLength: 20)
@@ -149,7 +204,7 @@ struct ContentView: View {
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(WolfenceIconButtonStyle(tone: WolfenceTheme.action))
                 .disabled(activeMonitor == nil || (activeMonitor?.isRefreshing ?? false))
 
                 Button {
@@ -157,55 +212,44 @@ struct ContentView: View {
                 } label: {
                     Image(systemName: "arrow.triangle.2.circlepath")
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(WolfenceIconButtonStyle(tone: WolfenceTheme.navy))
                 .disabled(workspace.repositories.isEmpty)
             }
-            .foregroundStyle(WolfenceTheme.primaryInk)
         }
         .padding(.leading, 18)
         .padding(.trailing, 26)
-        .padding(.top, 14)
-        .padding(.bottom, 14)
+        .padding(.top, 10)
+        .padding(.bottom, 8)
     }
 
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                Color.clear
-                    .frame(width: 54, height: 14)
+        VStack(alignment: sidebarCollapsed ? .center : .leading, spacing: 0) {
+            if !sidebarCollapsed {
+                HStack(spacing: 10) {
+                    Color.clear
+                        .frame(width: 54, height: 14)
 
-                Button {
-                    sidebarCollapsed.toggle()
-                } label: {
-                    Image(systemName: sidebarCollapsed ? "sidebar.right" : "sidebar.left")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(WolfenceTheme.primaryInk)
+                    Spacer(minLength: 0)
+
+                    Color.clear
                         .frame(width: 32, height: 32)
-                        .background(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(Color.white.opacity(0.22))
-                        )
                 }
-                .buttonStyle(.plain)
-
-                Spacer(minLength: 0)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 10)
+                .padding(.bottom, -5)
+                .padding(.horizontal, 12)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, 10)
-            .padding(.bottom, sidebarCollapsed ? 14 : 12)
-            .padding(.leading, 10)
 
-            HStack(spacing: 10) {
-                wolfHeaderMark(size: sidebarCollapsed ? 60 : 38)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            HStack(spacing: 14) {
+                wolfHeaderMark(size: 60)
 
                 if !sidebarCollapsed {
                     VStack(alignment: .leading, spacing: 1) {
                         Text("Wolfence")
-                            .font(.system(size: 18, weight: .semibold, design: .serif))
+                            .font(.system(size: 24, weight: .semibold, design: .serif))
                             .foregroundStyle(WolfenceTheme.primaryInk)
                         Text("Repository Gate")
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
                             .foregroundStyle(WolfenceTheme.mutedInk)
                     }
                 }
@@ -215,7 +259,9 @@ struct ContentView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: sidebarCollapsed ? .center : .leading)
-            .padding(.bottom, 8)
+            .padding(.horizontal, sidebarSectionPadding)
+            .padding(.top, sidebarCollapsed ? 30 : 0)
+            .padding(.bottom, sidebarCollapsed ? 12 : 10)
 
             if !sidebarCollapsed {
                 Text("\(workspace.repositories.count) workspaces")
@@ -224,6 +270,7 @@ struct ContentView: View {
                     .textCase(.uppercase)
                     .padding(.top, 16)
                     .padding(.bottom, 8)
+                    .padding(.horizontal, sidebarSectionPadding)
             }
 
             ScrollView {
@@ -237,6 +284,9 @@ struct ContentView: View {
                                 workspace.selectRepository(id: repository.id)
                                 persistWorkspace()
                             },
+                            onCustomizeIcon: {
+                                iconEditorRepositoryID = repository.id
+                            },
                             onRemove: {
                                 workspace.removeRepository(id: repository.id)
                                 persistWorkspace()
@@ -244,9 +294,9 @@ struct ContentView: View {
                         )
                     }
                 }
-                .padding(.horizontal, 12)
+                .frame(maxWidth: .infinity, alignment: sidebarCollapsed ? .center : .leading)
+                .padding(.horizontal, sidebarSectionPadding)
                 .padding(.bottom, 14)
-            
             }
             .scrollIndicators(.hidden)
 
@@ -274,12 +324,14 @@ struct ContentView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: sidebarCollapsed ? .center : .leading)
+            .padding(.horizontal, sidebarSectionPadding)
             .padding(.bottom, sidebarCollapsed ? 0 : 10)
         }
-        .padding(.horizontal, sidebarCollapsed ? 10 : 12)
+        .padding(.horizontal, sidebarCollapsed ? 10 : 0)
         .padding(.bottom, 10)
         .frame(width: sidebarWidth)
         .frame(maxHeight: .infinity)
+        .animation(.snappy(duration: 0.18, extraBounce: 0), value: sidebarCollapsed)
         .background(
             Rectangle()
                 .fill(
@@ -311,18 +363,37 @@ struct ContentView: View {
         }
     }
 
+    private var sidebarToggleButton: some View {
+        Button {
+            withAnimation(.snappy(duration: 0.18, extraBounce: 0)) {
+                sidebarCollapsed.toggle()
+            }
+        } label: {
+            Image(systemName: sidebarCollapsed ? "sidebar.right" : "sidebar.left")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(WolfenceTheme.primaryInk)
+                .frame(width: 32, height: 32)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.white.opacity(0.22))
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
     private var detailArea: some View {
         Group {
             if let repository = activeRepository, let monitor = activeMonitor {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 22) {
+                    VStack(alignment: .leading, spacing: 18) {
                         repoHeroPanel(repository: repository, monitor: monitor)
                         statusGrid(monitor: monitor)
                         detailGrid(monitor: monitor)
                         auditPanel(monitor: monitor)
                     }
-                    .padding(24)
-                    .padding(.bottom, 24)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 10)
+                    .padding(.bottom, 18)
                 }
                 .scrollIndicators(.hidden)
             } else {
@@ -338,56 +409,48 @@ struct ContentView: View {
     }
 
     private func repoHeroPanel(repository: WorkspaceRepository, monitor: WolfenceMonitor) -> some View {
-        SurfacePanel {
+        SurfacePanel(emphasis: .hero) {
             HStack(alignment: .top, spacing: 24) {
-                VStack(alignment: .leading, spacing: 18) {
-                    HStack(alignment: .top, spacing: 18) {
-                        repoMonogram(for: repository)
+                VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text(monitor.pushSafetyHeadline)
+                            .font(.system(size: 42, weight: .semibold, design: .serif))
+                            .foregroundStyle(monitor.heroColor)
 
-                        VStack(alignment: .leading, spacing: 7) {
-                            Text(repository.displayTitle)
-                                .font(.system(size: 40, weight: .regular, design: .serif))
-                                .foregroundStyle(WolfenceTheme.primaryInk)
+                        Text(monitor.pushSafetySummary)
+                            .font(.system(size: 15, weight: .medium, design: .rounded))
+                            .foregroundStyle(WolfenceTheme.secondaryInk)
 
-                            Text(repository.path)
-                                .font(.system(size: 12, weight: .medium, design: .monospaced))
-                                .foregroundStyle(WolfenceTheme.mutedInk)
-                                .textSelection(.enabled)
-
-                            Text("Git desktop, repository gate, and local security console in one persistent workspace.")
-                                .font(.system(size: 14, weight: .medium, design: .rounded))
-                                .foregroundStyle(WolfenceTheme.secondaryInk)
-                        }
+                        Text(repository.path)
+                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                            .foregroundStyle(WolfenceTheme.mutedInk)
+                            .textSelection(.enabled)
                     }
-
-                    Divider()
-                        .overlay(WolfenceTheme.rule)
 
                     HStack(spacing: 12) {
                         Button {
-                            Task { await repository.monitor.refresh() }
+                            Task { await repository.monitor.scan() }
                         } label: {
-                            Label(repository.monitor.isRefreshing ? "Refreshing…" : "Refresh Repo", systemImage: "arrow.clockwise")
+                            Label(repository.monitor.isRefreshing ? "Scanning…" : "Scan", systemImage: "magnifyingglass")
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(WolfenceTheme.action)
+                        .buttonStyle(WolfenceActionButtonStyle(tone: WolfenceTheme.action, prominence: .primary))
 
                         Button("Reveal in Finder") {
                             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: repository.path)])
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(WolfenceActionButtonStyle(tone: WolfenceTheme.navy))
 
                         Button("Copy Path") {
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(repository.path, forType: .string)
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(WolfenceActionButtonStyle(tone: WolfenceTheme.steel))
                     }
                 }
 
                 Spacer(minLength: 24)
 
-                VStack(alignment: .trailing, spacing: 16) {
+                VStack(alignment: .trailing, spacing: 12) {
                     VStack(alignment: .trailing, spacing: 8) {
                         Text(monitor.heroTitle)
                             .font(.system(size: 32, weight: .semibold, design: .serif))
@@ -425,9 +488,10 @@ struct ContentView: View {
     }
 
     private func detailGrid(monitor: WolfenceMonitor) -> some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 380), spacing: 18)], spacing: 18) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 420), spacing: 22)], spacing: 18) {
             pushPanel(monitor: monitor)
             doctorPanel(monitor: monitor)
+            governancePanel(monitor: monitor)
             policyPanel(monitor: monitor)
             findingsPanel(monitor: monitor)
             scanScopePanel(monitor: monitor)
@@ -437,18 +501,40 @@ struct ContentView: View {
 
     private func pushPanel(monitor: WolfenceMonitor) -> some View {
         SurfacePanel(title: "Push Posture", subtitle: "Primary decision surface") {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 12) {
                 InfoRow(label: "Verdict", value: monitor.pushDecisionValue)
                 InfoRow(label: "Scope", value: monitor.pushScopeDescription)
                 InfoRow(label: "Branch", value: monitor.branchLine)
                 InfoRow(label: "Execution", value: monitor.pushExecutionDetail)
 
                 if let detail = monitor.scanDetailLine {
-                    Divider()
-                        .overlay(WolfenceTheme.rule)
                     Text(detail)
                         .font(.system(size: 13, weight: .medium, design: .rounded))
                         .foregroundStyle(WolfenceTheme.secondaryInk)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Scan Log")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundStyle(WolfenceTheme.mutedInk)
+
+                    ScrollView {
+                        Text(monitor.lastScanLog)
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundStyle(WolfenceTheme.secondaryInk)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                    }
+                    .frame(minHeight: 88, maxHeight: 132)
+                    .padding(10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color.white.opacity(0.34))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(WolfenceTheme.rule, lineWidth: 1)
+                            )
+                    )
                 }
             }
         }
@@ -456,7 +542,7 @@ struct ContentView: View {
 
     private func doctorPanel(monitor: WolfenceMonitor) -> some View {
         SurfacePanel(title: "Local Trust", subtitle: "Doctor summary and weak points") {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 12) {
                 if let doctor = monitor.doctorReport {
                     Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 10) {
                         GridRow {
@@ -466,9 +552,6 @@ struct ContentView: View {
                             summaryValue("Info", value: doctor.summary.info, tone: WolfenceTheme.steel)
                         }
                     }
-
-                    Divider()
-                        .overlay(WolfenceTheme.rule)
 
                     VStack(alignment: .leading, spacing: 12) {
                         ForEach(monitor.priorityChecks) { check in
@@ -487,10 +570,6 @@ struct ContentView: View {
                                         .foregroundStyle(WolfenceTheme.mutedInk)
                                 }
                             }
-                            if check.id != monitor.priorityChecks.last?.id {
-                                Divider()
-                                    .overlay(WolfenceTheme.rule.opacity(0.65))
-                            }
                         }
                     }
                 } else {
@@ -505,7 +584,7 @@ struct ContentView: View {
 
     private func policyPanel(monitor: WolfenceMonitor) -> some View {
         SurfacePanel(title: "Policy Surface", subtitle: "Repo-local enforcement defaults") {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 12) {
                 InfoRow(label: "Mode", value: monitor.policyModeDisplay)
                 InfoRow(label: "Source", value: monitor.modeSourceDisplay)
                 InfoRow(label: "Ignored Paths", value: monitor.ignorePathsDisplay)
@@ -516,26 +595,107 @@ struct ContentView: View {
         }
     }
 
+    private func governancePanel(monitor: WolfenceMonitor) -> some View {
+        SurfacePanel(title: "GitHub Governance", subtitle: "Live repo drift and branch protection intent") {
+            VStack(alignment: .leading, spacing: 12) {
+                if let check = monitor.githubGovernanceCheck {
+                    InfoRow(label: "Status", value: check.status.displayLabel)
+                    Text(check.detail)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(WolfenceTheme.secondaryInk)
+
+                    if let remediation = check.remediation {
+                        Text(remediation)
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(check.status.tone)
+                    }
+                } else {
+                    unavailableState(
+                        title: "No live governance signal",
+                        detail: "Doctor did not return a live GitHub governance comparison for this repository."
+                    )
+                }
+            }
+        }
+    }
+
     private func findingsPanel(monitor: WolfenceMonitor) -> some View {
         SurfacePanel(title: "Findings & Exceptions", subtitle: "Active push preview evidence") {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 12) {
                 if let scan = monitor.pushPreview {
                     InfoRow(label: "Findings", value: "\(scan.report?.findings.count ?? 0)")
+                    InfoRow(label: "New Findings", value: "\(scan.report?.findingHistory?.newFindings ?? 0)")
+                    InfoRow(label: "Recurring", value: "\(scan.report?.findingHistory?.recurringFindings ?? 0)")
+                    InfoRow(label: "Accepted Baseline", value: "\(scan.report?.findingBaseline?.acceptedFindings ?? 0)")
+                    InfoRow(label: "Needs Review", value: "\(scan.report?.findingBaseline?.unacceptedFindings ?? 0)")
                     InfoRow(label: "Blocking Findings", value: "\(scan.decision?.blockingFindings.count ?? 0)")
                     InfoRow(label: "Warning Findings", value: "\(scan.decision?.warningFindings.count ?? 0)")
                     InfoRow(label: "Overrides Applied", value: "\(scan.receipts.overridesApplied)")
                     InfoRow(label: "Receipt Issues", value: "\(scan.receipts.issueCount)")
 
-                    if let topFinding = (scan.decision?.blockingFindings.first?.finding ?? scan.decision?.warningFindings.first?.finding) {
-                        Divider()
-                            .overlay(WolfenceTheme.rule)
+                    if let topFinding = monitor.topFinding {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(topFinding.title)
-                                .font(.system(size: 14, weight: .semibold, design: .rounded))
-                                .foregroundStyle(WolfenceTheme.primaryInk)
+                            HStack(alignment: .center, spacing: 8) {
+                                Text(topFinding.title)
+                                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(WolfenceTheme.primaryInk)
+
+                                if let history = topFinding.history {
+                                    Text(history.statusLabel)
+                                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                                        .foregroundStyle(history.tone)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                        .background(history.tone.opacity(0.12), in: Capsule())
+                                }
+
+                                if let baseline = topFinding.baseline {
+                                    Text(baseline.statusLabel)
+                                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                                        .foregroundStyle(baseline.tone)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                        .background(baseline.tone.opacity(0.12), in: Capsule())
+                                }
+                            }
                             Text(topFinding.detail)
                                 .font(.system(size: 12, weight: .medium, design: .rounded))
                                 .foregroundStyle(WolfenceTheme.secondaryInk)
+                            Text(topFinding.remediationAdvice.primaryAction)
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                .foregroundStyle(WolfenceTheme.caution)
+                            Text("\(topFinding.remediationAdvice.urgencyLabel) • \(topFinding.remediationAdvice.ownerSurfaceLabel)")
+                                .font(.system(size: 11, weight: .medium, design: .rounded))
+                                .foregroundStyle(WolfenceTheme.mutedInk)
+                            if let command = topFinding.remediationAdvice.primaryCommand {
+                                Text(command)
+                                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(WolfenceTheme.secondaryInk)
+                            }
+                        }
+                    }
+
+                    if !monitor.fixNowActions.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Fix Now")
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
+                                .foregroundStyle(WolfenceTheme.mutedInk)
+
+                            ForEach(monitor.fixNowActions) { action in
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(action.primaryAction)
+                                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(action.urgencyTone)
+                                    Text("\(action.urgencyLabel) • \(action.ownerSurfaceLabel)")
+                                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                                        .foregroundStyle(WolfenceTheme.mutedInk)
+                                    if let command = action.primaryCommand {
+                                        Text(command)
+                                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                            .foregroundStyle(WolfenceTheme.secondaryInk)
+                                    }
+                                }
+                            }
                         }
                     }
                 } else {
@@ -550,14 +710,11 @@ struct ContentView: View {
 
     private func scanScopePanel(monitor: WolfenceMonitor) -> some View {
         SurfacePanel(title: "Candidate Scope", subtitle: "Files entering the gate") {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 12) {
                 if let scope = monitor.pushPreview?.scanScope {
                     InfoRow(label: "Discovered", value: "\(scope.discoveredFiles)")
                     InfoRow(label: "Scanned", value: "\(scope.scannedFiles)")
                     InfoRow(label: "Ignored", value: "\(scope.ignoredFiles)")
-
-                    Divider()
-                        .overlay(WolfenceTheme.rule)
 
                     Text("Included Paths")
                         .font(.system(size: 13, weight: .semibold, design: .rounded))
@@ -582,7 +739,7 @@ struct ContentView: View {
 
     private func receiptsPanel(monitor: WolfenceMonitor) -> some View {
         SurfacePanel(title: "Receipts & Governance", subtitle: "Exception controls") {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 12) {
                 InfoRow(label: "Require Signatures", value: monitor.signaturePolicyDisplay)
                 InfoRow(label: "Require Reviewer", value: monitor.reviewerPolicyDisplay)
                 InfoRow(label: "Explicit Category", value: monitor.explicitCategoryDisplay)
@@ -644,12 +801,7 @@ struct ContentView: View {
                                 }
                             }
                         }
-                        .padding(.vertical, 14)
-
-                        if index < min(monitor.auditEntries.count, 10) - 1 {
-                            Divider()
-                                .overlay(WolfenceTheme.rule)
-                        }
+                        .padding(.vertical, 10)
                     }
                 }
             }
@@ -681,11 +833,24 @@ struct ContentView: View {
     }
 
     private func wolfHeaderMark(size: CGFloat) -> some View {
-        Image(nsImage: NSApp.applicationIconImage)
-            .resizable()
-            .scaledToFit()
-            .frame(width: size, height: size)
-            .shadow(color: WolfenceTheme.navy.opacity(0.18), radius: 18, y: 8)
+        Group {
+            if let logoImage = NSImage(contentsOf: wolfHeaderLogoURL) {
+                Image(nsImage: logoImage)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .scaledToFit()
+            }
+        }
+        .frame(width: size, height: size)
+        .shadow(color: WolfenceTheme.navy.opacity(0.18), radius: 18, y: 8)
+    }
+
+    private var wolfHeaderLogoURL: URL {
+        URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("Media/logo.png")
     }
 
     private func repoMonogram(for repository: WorkspaceRepository) -> some View {
@@ -711,17 +876,18 @@ struct ContentView: View {
 
     private func restoreWorkspaceIfNeeded() async {
         let storedPaths = decodeStoredPaths(workspaceRepositoryPaths)
+        let iconCustomizations = decodeStoredIcons(workspaceRepositoryIcons)
 
         if storedPaths.isEmpty {
             let fallback = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
             guard FileManager.default.fileExists(atPath: fallback.path) else { return }
-            await workspace.restore(paths: [fallback.path], selectedID: fallback.path)
+            await workspace.restore(paths: [fallback.path], selectedID: fallback.path, iconCustomizations: iconCustomizations)
             selectedRepositoryPath = fallback.path
             persistWorkspace()
             return
         }
 
-        await workspace.restore(paths: storedPaths, selectedID: selectedRepositoryPath)
+        await workspace.restore(paths: storedPaths, selectedID: selectedRepositoryPath, iconCustomizations: iconCustomizations)
         if workspace.selectedRepositoryID == nil {
             selectedRepositoryPath = workspace.selectedRepositoryID ?? ""
         }
@@ -746,6 +912,9 @@ struct ContentView: View {
 
     private func persistWorkspace() {
         workspaceRepositoryPaths = encodeStoredPaths(workspace.repositories.map(\.path))
+        workspaceRepositoryIcons = encodeStoredIcons(
+            Dictionary(uniqueKeysWithValues: workspace.repositories.map { ($0.id, $0.iconCustomization) })
+        )
         selectedRepositoryPath = workspace.selectedRepositoryID ?? ""
     }
 
@@ -761,6 +930,20 @@ struct ContentView: View {
         }
         return string
     }
+
+    private func decodeStoredIcons(_ rawValue: String) -> [String: RepositoryIconCustomization] {
+        guard let data = rawValue.data(using: .utf8) else { return [:] }
+        return (try? JSONDecoder().decode([String: RepositoryIconCustomization].self, from: data)) ?? [:]
+    }
+
+    private func encodeStoredIcons(_ icons: [String: RepositoryIconCustomization]) -> String {
+        let filtered = icons.filter { !$0.value.isEmpty }
+        guard let data = try? JSONEncoder().encode(filtered),
+              let string = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return string
+    }
 }
 
 @Observable
@@ -773,9 +956,9 @@ private final class WorkspaceStore {
         repositories.first(where: { $0.id == selectedRepositoryID })
     }
 
-    func restore(paths: [String], selectedID: String?) async {
+    func restore(paths: [String], selectedID: String?, iconCustomizations: [String: RepositoryIconCustomization]) async {
         let uniquePaths = Array(Set(paths)).sorted()
-        repositories = uniquePaths.map { WorkspaceRepository(path: $0) }
+        repositories = uniquePaths.map { WorkspaceRepository(path: $0, iconCustomization: iconCustomizations[$0] ?? .empty) }
         selectedRepositoryID = selectedID.flatMap { id in
             repositories.contains(where: { $0.id == id }) ? id : repositories.first?.id
         } ?? repositories.first?.id
@@ -808,6 +991,10 @@ private final class WorkspaceStore {
         selectedRepositoryID = id
     }
 
+    func updateRepositoryIcon(id: String, customization: RepositoryIconCustomization) {
+        repositories.first(where: { $0.id == id })?.iconCustomization = customization
+    }
+
     func refreshSelectedRepository() async {
         await selectedRepository?.monitor.refresh()
     }
@@ -821,8 +1008,8 @@ private final class WorkspaceStore {
     static var preview: WorkspaceStore {
         let store = WorkspaceStore()
         store.repositories = [
-            WorkspaceRepository(path: "/Users/yoavperetz/Developer/Wolfence", monitor: .preview),
-            WorkspaceRepository(path: "/Users/yoavperetz/Developer/Dragon", monitor: .previewSecondary)
+            WorkspaceRepository(path: "/Users/yoavperetz/Developer/Wolfence", monitor: .preview, iconCustomization: RepositoryIconCustomization(symbol: "WO", color: .action)),
+            WorkspaceRepository(path: "/Users/yoavperetz/Developer/Dragon", monitor: .previewSecondary, iconCustomization: RepositoryIconCustomization(symbol: "🐉", color: .alert))
         ]
         store.selectedRepositoryID = store.repositories.first?.id
         return store
@@ -835,10 +1022,12 @@ private final class WorkspaceRepository: Identifiable {
     let id: String
     let path: String
     let monitor: WolfenceMonitor
+    var iconCustomization: RepositoryIconCustomization
 
-    init(path: String, monitor: WolfenceMonitor? = nil) {
+    init(path: String, monitor: WolfenceMonitor? = nil, iconCustomization: RepositoryIconCustomization? = nil) {
         self.id = path
         self.path = path
+        self.iconCustomization = iconCustomization ?? .empty
         if let monitor {
             self.monitor = monitor
         } else {
@@ -862,23 +1051,13 @@ private struct SidebarRepositoryRow: View {
     let isSelected: Bool
     let isCollapsed: Bool
     let onSelect: () -> Void
+    let onCustomizeIcon: () -> Void
     let onRemove: () -> Void
 
     var body: some View {
         Button(action: onSelect) {
             HStack(spacing: 10) {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(
-                        isSelected
-                            ? repository.monitor.heroColor.opacity(0.95)
-                            : Color.white.opacity(0.22)
-                    )
-                    .frame(width: isCollapsed ? 48 : 22, height: isCollapsed ? 48 : 22)
-                    .overlay(
-                        Text(repository.shortName.prefix(2).uppercased())
-                            .font(.system(size: isCollapsed ? 13 : 10, weight: .bold, design: .rounded))
-                            .foregroundStyle(isSelected ? Color.white : WolfenceTheme.primaryInk)
-                    )
+                RepositorySidebarIcon(repository: repository, size: isCollapsed ? 48 : 22, isSelected: isSelected)
 
                 if !isCollapsed {
                     VStack(alignment: .leading, spacing: 2) {
@@ -922,6 +1101,9 @@ private struct SidebarRepositoryRow: View {
         .buttonStyle(.plain)
         .help(repository.displayTitle)
         .contextMenu {
+            Button("Change Icon") {
+                onCustomizeIcon()
+            }
             Button("Reveal in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: repository.path)])
             }
@@ -945,7 +1127,7 @@ private struct SidebarActionButton: View {
             HStack(spacing: 10) {
                 Image(systemName: icon)
                     .font(.system(size: 14, weight: .bold))
-                    .frame(width: 18)
+                    .frame(width: collapsed ? 48 : 18)
 
                 if !collapsed {
                     Text(title)
@@ -954,8 +1136,8 @@ private struct SidebarActionButton: View {
                 }
             }
             .foregroundStyle(isSelected ? Color.white : WolfenceTheme.primaryInk)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
+            .padding(.horizontal, collapsed ? 0 : 12)
+            .padding(.vertical, collapsed ? 0 : 9)
             .frame(
                 maxWidth: collapsed ? 48 : .infinity,
                 minHeight: collapsed ? 48 : nil,
@@ -981,6 +1163,49 @@ private struct SidebarActionButton: View {
     }
 }
 
+private struct RepositorySidebarIcon: View {
+    let repository: WorkspaceRepository
+    let size: CGFloat
+    let isSelected: Bool
+
+    var body: some View {
+        ZStack {
+            if let imagePath = repository.iconCustomization.imagePath,
+               let image = NSImage(contentsOfFile: imagePath) {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                RoundedRectangle(cornerRadius: max(10, size * 0.28), style: .continuous)
+                    .fill(backgroundColor)
+
+                Text(displaySymbol)
+                    .font(.system(size: max(10, size * 0.34), weight: .bold, design: .rounded))
+                    .foregroundStyle(textColor)
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: max(10, size * 0.28), style: .continuous))
+    }
+
+    private var displaySymbol: String {
+        let custom = repository.iconCustomization.symbol.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !custom.isEmpty {
+            return String(custom.prefix(2))
+        }
+        return String(repository.shortName.prefix(2).uppercased())
+    }
+
+    private var backgroundColor: Color {
+        let base = repository.iconCustomization.color.color
+        return isSelected ? base.opacity(0.95) : base.opacity(0.18)
+    }
+
+    private var textColor: Color {
+        isSelected ? Color.white : WolfenceTheme.primaryInk
+    }
+}
+
 @Observable
 @MainActor
 private final class WolfenceMonitor {
@@ -992,6 +1217,7 @@ private final class WolfenceMonitor {
     private(set) var auditEntries: [AuditEntry] = []
     private(set) var isRefreshing = false
     private(set) var errorMessage: String?
+    private(set) var lastScanLog = "Scan has not been run yet."
     private(set) var lastUpdated = Date()
 
     var heroTitle: String {
@@ -1080,6 +1306,40 @@ private final class WolfenceMonitor {
             return preview.outcomeDetail
         }
         return errorMessage ?? "Refresh to load a current push-preview state."
+    }
+
+    var pushSafetyHeadline: String {
+        if errorMessage != nil {
+            return "Not Safe To Push"
+        }
+
+        switch pushPreview?.decision?.verdict {
+        case .block:
+            return "Not Safe To Push"
+        case .warn:
+            return "Push Needs Review"
+        case .allow:
+            return "Safe To Push"
+        case .none:
+            return "Push Status Unknown"
+        }
+    }
+
+    var pushSafetySummary: String {
+        if let errorMessage {
+            return errorMessage
+        }
+
+        switch pushPreview?.decision?.verdict {
+        case .block:
+            return "Blocking findings or trust failures are present. Resolve them before pushing."
+        case .warn:
+            return "The repository can move forward, but warnings or exceptions should be reviewed first."
+        case .allow:
+            return "Current policy, trust, and scan evidence allow this repository to push."
+        case .none:
+            return "Run a scan to load the latest push-safety decision for this repository."
+        }
     }
 
     var doctorValue: String {
@@ -1213,9 +1473,37 @@ private final class WolfenceMonitor {
         return important.isEmpty ? Array(doctorReport.checks.prefix(4)) : important
     }
 
+    var githubGovernanceCheck: DoctorCheck? {
+        doctorReport?.checks.first { $0.name.localizedCaseInsensitiveContains("github governance") }
+    }
+
+    var prioritizedFindings: [Finding] {
+        guard let decision = pushPreview?.decision else { return [] }
+        let findings = decision.blockingFindings.map(\.finding) + decision.warningFindings.map(\.finding)
+        let notInBaseline = findings.filter { !($0.baseline?.accepted ?? false) }
+        let acceptedBaseline = findings.filter { $0.baseline?.accepted ?? false }
+        return notInBaseline + acceptedBaseline
+    }
+
+    var topFinding: Finding? {
+        prioritizedFindings.first
+    }
+
+    var fixNowActions: [RemediationAdvice] {
+        let actions = prioritizedFindings.map(\.remediationAdvice)
+
+        var seen = Set<String>()
+        return actions.filter { action in
+            seen.insert("\(action.primaryAction)|\(action.urgency)|\(action.ownerSurface)").inserted
+        }
+        .prefix(3)
+        .map { $0 }
+    }
+
     func setRepository(_ url: URL) {
         repositoryURL = url
         errorMessage = nil
+        lastScanLog = "Scan has not been run yet."
     }
 
     func refresh() async {
@@ -1234,6 +1522,27 @@ private final class WolfenceMonitor {
             lastUpdated = Date()
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    func scan() async {
+        guard let repositoryURL else { return }
+        isRefreshing = true
+        lastScanLog = "Running `wolf scan push --json` in \(repositoryURL.path)"
+        defer { isRefreshing = false }
+
+        do {
+            let scanResult = try await WolfenceInspector.scan(at: repositoryURL)
+            pushPreview = scanResult.pushPreview
+            repoConfiguration = scanResult.repoConfiguration
+            receiptPolicy = scanResult.receiptPolicy
+            auditEntries = scanResult.auditEntries
+            lastScanLog = scanResult.commandLog
+            errorMessage = scanResult.pushPreview?.error?.message
+            lastUpdated = Date()
+        } catch {
+            errorMessage = error.localizedDescription
+            lastScanLog = error.localizedDescription
         }
     }
 
@@ -1379,7 +1688,9 @@ private final class WolfenceMonitor {
                 discoveredFiles: 42,
                 scannedFiles: 31,
                 ignoredFiles: 11,
-                scannersRun: 5
+                scannersRun: 5,
+                findingHistory: FindingHistorySummary(newFindings: 0, recurringFindings: 1, issue: nil),
+                findingBaseline: FindingBaselineSummary(acceptedFindings: 1, unacceptedFindings: 0, issue: nil)
             ),
             decision: PolicyDecision(
                 verdict: .warn,
@@ -1396,7 +1707,17 @@ private final class WolfenceMonitor {
                             title: "Deployment secrets exposed to broad environment scope",
                             detail: "A deploy workflow exposes secret material to multiple jobs.",
                             remediation: "Restrict secret scope to the deployment job only.",
-                            fingerprint: "dragon-config-001"
+                            remediationAdvice: RemediationAdvice(
+                                kind: "restrict-scope",
+                                urgency: "before-push",
+                                ownerSurface: "workflow",
+                                primaryAction: "Reduce workflow secret scope so only the deployment job receives the credential.",
+                                primaryCommand: nil,
+                                docsRef: "docs/security/detection-model.md"
+                            ),
+                            fingerprint: "dragon-config-001",
+                            history: FindingHistory(status: "recurring", firstSeenUnix: 1_775_760_000, lastSeenUnix: 1_775_769_632, timesSeen: 4),
+                            baseline: FindingBaseline(accepted: true, capturedOnUnix: 1_775_700_000)
                         ),
                         rationale: "Strict mode surfaces the finding as an operator warning."
                     )
@@ -1463,6 +1784,24 @@ private enum WolfenceInspector {
         }.value
     }
 
+    nonisolated static func scan(at repositoryURL: URL) async throws -> ScanState {
+        try await Task.detached(priority: .userInitiated) {
+            let repoRoot = repositoryURL
+            let scanCommand = try await runPushScan(at: repoRoot)
+            let config = try loadRepoConfiguration(at: repoRoot)
+            let receiptPolicy = try loadReceiptPolicy(at: repoRoot)
+            let auditEntries = try await loadAuditEntries(at: repoRoot)
+
+            return ScanState(
+                pushPreview: scanCommand.pushPreview,
+                repoConfiguration: config,
+                receiptPolicy: receiptPolicy,
+                auditEntries: auditEntries,
+                commandLog: scanCommand.commandLog
+            )
+        }.value
+    }
+
     private nonisolated static func loadDoctor(at repoRoot: URL) async throws -> DoctorReport? {
         guard let output = try runWolfJSON(arguments: ["doctor", "--json"], in: repoRoot) else {
             return nil
@@ -1478,6 +1817,27 @@ private enum WolfenceInspector {
         }
         return try await MainActor.run {
             try JSONDecoder().decode(PushPreviewReport.self, from: output)
+        }
+    }
+
+    private nonisolated static func runPushScan(at repoRoot: URL) async throws -> ScanCommandResult {
+        let arguments = ["scan", "push", "--json"]
+        let execution = try runWolfCommand(arguments: arguments, in: repoRoot)
+        let commandLog = formatCommandLog(command: execution.commandDescription, output: execution.output)
+
+        guard !execution.output.stdout.isEmpty else {
+            throw WolfenceError.commandFailed(commandLog)
+        }
+
+        let data = Data(execution.output.stdout.utf8)
+
+        do {
+            let preview = try await MainActor.run {
+                try JSONDecoder().decode(PushPreviewReport.self, from: data)
+            }
+            return ScanCommandResult(pushPreview: preview, commandLog: commandLog)
+        } catch {
+            throw WolfenceError.commandFailed("Failed to decode scan JSON.\n\(commandLog)")
         }
     }
 
@@ -1534,18 +1894,44 @@ private enum WolfenceInspector {
     }
 
     private nonisolated static func runWolfJSON(arguments: [String], in repoRoot: URL) throws -> Data? {
-        if let binary = discoverWolfBinary(in: repoRoot) {
-            let output = try shell(binary.path, arguments, in: repoRoot, allowFailure: true, useEnv: false)
-            guard !output.stdout.isEmpty else { return nil }
-            return output.stdout.data(using: .utf8)
-        }
-
-        let output = try shell("wolf", arguments, in: repoRoot, allowFailure: true)
+        let output = try runWolfCommand(arguments: arguments, in: repoRoot).output
         if !output.stdout.isEmpty {
             return output.stdout.data(using: .utf8)
         }
-
         return nil
+    }
+
+    private nonisolated static func runWolfCommand(arguments: [String], in repoRoot: URL) throws -> CommandExecution {
+        if let binary = discoverWolfBinary(in: repoRoot) {
+            let output = try shell(binary.path, arguments, in: repoRoot, allowFailure: true, useEnv: false)
+            return CommandExecution(commandDescription: ([binary.path] + arguments).joined(separator: " "), output: output)
+        }
+
+        let output = try shell("wolf", arguments, in: repoRoot, allowFailure: true)
+        return CommandExecution(commandDescription: (["wolf"] + arguments).joined(separator: " "), output: output)
+    }
+
+    private nonisolated static func formatCommandLog(command: String, output: ShellOutput) -> String {
+        var lines = [
+            "Command: \(command)",
+            "Exit Status: \(output.status)"
+        ]
+
+        if !output.stderr.isEmpty {
+            lines.append("stderr:")
+            lines.append(output.stderr)
+        }
+
+        if !output.stdout.isEmpty {
+            lines.append("stdout:")
+            lines.append(output.stdout)
+        }
+
+        if output.stdout.isEmpty && output.stderr.isEmpty {
+            lines.append("No output was produced.")
+        }
+
+        return lines.joined(separator: "\n")
     }
 
     private nonisolated static func discoverWolfBinary(in repoRoot: URL) -> URL? {
@@ -1642,6 +2028,24 @@ private struct ConsoleState: Sendable {
     let auditEntries: [AuditEntry]
 }
 
+private struct ScanState: Sendable {
+    let pushPreview: PushPreviewReport?
+    let repoConfiguration: RepoConfiguration
+    let receiptPolicy: ReceiptPolicy
+    let auditEntries: [AuditEntry]
+    let commandLog: String
+}
+
+private struct ScanCommandResult: Sendable {
+    let pushPreview: PushPreviewReport
+    let commandLog: String
+}
+
+private struct CommandExecution: Sendable {
+    let commandDescription: String
+    let output: ShellOutput
+}
+
 private struct RepoConfiguration: Sendable {
     var policyMode: String?
     var ignorePaths: [String]
@@ -1713,6 +2117,23 @@ private enum DoctorStatus: String, Decodable, Sendable {
     case warn
     case fail
     case info
+
+    var displayLabel: String {
+        rawValue.capitalized
+    }
+
+    var tone: Color {
+        switch self {
+        case .pass:
+            return WolfenceTheme.ok
+        case .warn:
+            return WolfenceTheme.caution
+        case .fail:
+            return WolfenceTheme.alert
+        case .info:
+            return WolfenceTheme.steel
+        }
+    }
 }
 
 private struct PushPreviewReport: Decodable, Sendable {
@@ -1773,6 +2194,8 @@ private struct ScanReport: Decodable, Sendable {
     let scannedFiles: Int
     let ignoredFiles: Int
     let scannersRun: Int
+    var findingHistory: FindingHistorySummary? = nil
+    var findingBaseline: FindingBaselineSummary? = nil
 
     enum CodingKeys: String, CodingKey {
         case findings
@@ -1780,6 +2203,32 @@ private struct ScanReport: Decodable, Sendable {
         case scannedFiles = "scanned_files"
         case ignoredFiles = "ignored_files"
         case scannersRun = "scanners_run"
+        case findingHistory = "finding_history"
+        case findingBaseline = "finding_baseline"
+    }
+}
+
+private struct FindingHistorySummary: Decodable, Sendable {
+    let newFindings: Int
+    let recurringFindings: Int
+    let issue: String?
+
+    enum CodingKeys: String, CodingKey {
+        case newFindings = "new_findings"
+        case recurringFindings = "recurring_findings"
+        case issue
+    }
+}
+
+private struct FindingBaselineSummary: Decodable, Sendable {
+    let acceptedFindings: Int
+    let unacceptedFindings: Int
+    let issue: String?
+
+    enum CodingKeys: String, CodingKey {
+        case acceptedFindings = "accepted_findings"
+        case unacceptedFindings = "unaccepted_findings"
+        case issue
     }
 }
 
@@ -1844,7 +2293,97 @@ private struct Finding: Decodable, Sendable {
     let title: String
     let detail: String
     let remediation: String
+    let remediationAdvice: RemediationAdvice
     let fingerprint: String
+    var history: FindingHistory? = nil
+    var baseline: FindingBaseline? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case scanner, severity, confidence, category, file, line, title, detail, remediation, fingerprint, history, baseline
+        case remediationAdvice = "remediation_advice"
+    }
+}
+
+private struct FindingHistory: Decodable, Sendable {
+    let status: String
+    let firstSeenUnix: Int
+    let lastSeenUnix: Int
+    let timesSeen: Int
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case firstSeenUnix = "first_seen_unix"
+        case lastSeenUnix = "last_seen_unix"
+        case timesSeen = "times_seen"
+    }
+
+    var statusLabel: String {
+        status.replacingOccurrences(of: "-", with: " ").capitalized
+    }
+
+    var tone: Color {
+        switch status {
+        case "new":
+            return WolfenceTheme.caution
+        default:
+            return WolfenceTheme.steel
+        }
+    }
+}
+
+private struct FindingBaseline: Decodable, Sendable {
+    let accepted: Bool
+    let capturedOnUnix: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case accepted
+        case capturedOnUnix = "captured_on_unix"
+    }
+
+    var statusLabel: String {
+        accepted ? "Accepted Starting State" : "Needs Review"
+    }
+
+    var tone: Color {
+        accepted ? WolfenceTheme.steel : WolfenceTheme.caution
+    }
+}
+
+private struct RemediationAdvice: Decodable, Identifiable, Sendable {
+    var id: String { primaryAction + "|" + urgency + "|" + ownerSurface }
+    let kind: String
+    let urgency: String
+    let ownerSurface: String
+    let primaryAction: String
+    let primaryCommand: String?
+    let docsRef: String?
+
+    enum CodingKeys: String, CodingKey {
+        case kind, urgency
+        case ownerSurface = "owner_surface"
+        case primaryAction = "primary_action"
+        case primaryCommand = "primary_command"
+        case docsRef = "docs_ref"
+    }
+
+    var urgencyLabel: String {
+        urgency.replacingOccurrences(of: "-", with: " ").capitalized
+    }
+
+    var ownerSurfaceLabel: String {
+        ownerSurface.replacingOccurrences(of: "-", with: " ").capitalized
+    }
+
+    var urgencyTone: Color {
+        switch urgency {
+        case "immediate":
+            return WolfenceTheme.alert
+        case "before-push":
+            return WolfenceTheme.caution
+        default:
+            return WolfenceTheme.secondaryInk
+        }
+    }
 }
 
 private struct ReceiptSummary: Decodable, Sendable {
@@ -2005,13 +2544,25 @@ private enum WolfenceTheme {
 }
 
 private struct SurfacePanel<Content: View>: View {
+    enum Emphasis {
+        case hero
+        case section
+    }
+
     let title: String?
     let subtitle: String?
+    let emphasis: Emphasis
     @ViewBuilder let content: Content
 
-    init(title: String? = nil, subtitle: String? = nil, @ViewBuilder content: () -> Content) {
+    init(
+        title: String? = nil,
+        subtitle: String? = nil,
+        emphasis: Emphasis = .section,
+        @ViewBuilder content: () -> Content
+    ) {
         self.title = title
         self.subtitle = subtitle
+        self.emphasis = emphasis
         self.content = content()
     }
 
@@ -2033,17 +2584,8 @@ private struct SurfacePanel<Content: View>: View {
 
             content
         }
-        .padding(22)
+        .padding(.vertical, emphasis == .hero ? 6 : 14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .fill(WolfenceTheme.panel)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 28, style: .continuous)
-                        .stroke(WolfenceTheme.rule, lineWidth: 1)
-                )
-                .shadow(color: WolfenceTheme.navy.opacity(0.06), radius: 18, y: 12)
-        )
     }
 }
 
@@ -2068,17 +2610,251 @@ private struct MetricPanel: View {
                 .foregroundStyle(WolfenceTheme.secondaryInk)
                 .lineLimit(2)
         }
-        .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(Color.white.opacity(0.52))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .stroke(WolfenceTheme.rule, lineWidth: 1)
-                )
-        )
+        .padding(.vertical, 16)
     }
+}
+
+private struct WolfenceActionButtonStyle: ButtonStyle {
+    enum Prominence {
+        case primary
+        case secondary
+    }
+
+    let tone: Color
+    var prominence: Prominence = .secondary
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 13, weight: .semibold, design: .rounded))
+            .foregroundStyle(prominence == .primary ? Color.white : WolfenceTheme.primaryInk)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(backgroundFill(pressed: configuration.isPressed))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(tone.opacity(prominence == .primary ? 0.18 : 0.22), lineWidth: 1)
+                    )
+            )
+            .opacity(configuration.isPressed ? 0.92 : 1)
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .animation(.snappy(duration: 0.14, extraBounce: 0), value: configuration.isPressed)
+    }
+
+    private func backgroundFill(pressed: Bool) -> Color {
+        switch prominence {
+        case .primary:
+            return tone.opacity(pressed ? 0.82 : 0.94)
+        case .secondary:
+            return tone.opacity(pressed ? 0.12 : 0.16)
+        }
+    }
+}
+
+private struct WolfenceIconButtonStyle: ButtonStyle {
+    let tone: Color
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(tone)
+            .frame(width: 30, height: 30)
+            .background(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(tone.opacity(configuration.isPressed ? 0.14 : 0.1))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .stroke(tone.opacity(0.18), lineWidth: 1)
+                    )
+            )
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .animation(.snappy(duration: 0.14, extraBounce: 0), value: configuration.isPressed)
+    }
+}
+
+private struct RepositoryIconEditorSheet: View {
+    let repository: WorkspaceRepository
+    let onSave: (RepositoryIconCustomization) -> Void
+    let onCancel: () -> Void
+
+    @State private var symbol: String
+    @State private var selectedColor: Color
+    @State private var imagePath: String?
+
+    init(repository: WorkspaceRepository, onSave: @escaping (RepositoryIconCustomization) -> Void, onCancel: @escaping () -> Void) {
+        self.repository = repository
+        self.onSave = onSave
+        self.onCancel = onCancel
+        _symbol = State(initialValue: repository.iconCustomization.symbol)
+        _selectedColor = State(initialValue: repository.iconCustomization.color.color)
+        _imagePath = State(initialValue: repository.iconCustomization.imagePath)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Change Icon")
+                .font(.system(size: 24, weight: .semibold, design: .serif))
+                .foregroundStyle(WolfenceTheme.ivory)
+
+            HStack(spacing: 18) {
+                iconPreview
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(repository.displayTitle)
+                        .font(.system(size: 16, weight: .semibold, design: .rounded))
+                        .foregroundStyle(WolfenceTheme.ivory)
+
+                    Text("Use letters, emoji, a color tint, or a custom image.")
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(WolfenceTheme.parchment)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Letters or Emoji")
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(WolfenceTheme.parchment)
+
+                TextField("WO or 🐺", text: $symbol)
+                    .textFieldStyle(.roundedBorder)
+                    .foregroundStyle(WolfenceTheme.ivory)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Color")
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(WolfenceTheme.parchment)
+
+                ColorPicker("Icon Color", selection: $selectedColor, supportsOpacity: false)
+                    .labelsHidden()
+            }
+
+            HStack(spacing: 12) {
+                Button("Choose Image") {
+                    chooseImage()
+                }
+                .buttonStyle(WolfenceActionButtonStyle(tone: WolfenceTheme.navy, prominence: .primary))
+
+                Button("Use Text Icon") {
+                    imagePath = nil
+                }
+                .buttonStyle(WolfenceActionButtonStyle(tone: WolfenceTheme.steel, prominence: .primary))
+
+                Button("Reset") {
+                    symbol = ""
+                    selectedColor = WolfenceTheme.action
+                    imagePath = nil
+                }
+                .buttonStyle(WolfenceActionButtonStyle(tone: WolfenceTheme.steel, prominence: .primary))
+            }
+
+            HStack(spacing: 12) {
+                Spacer()
+
+                Button("Cancel") {
+                    onCancel()
+                }
+                .buttonStyle(WolfenceActionButtonStyle(tone: WolfenceTheme.steel, prominence: .primary))
+
+                Button("Save") {
+                    onSave(
+                        RepositoryIconCustomization(
+                            symbol: symbol,
+                            color: RepositoryIconTint(selectedColor),
+                            imagePath: imagePath
+                        )
+                    )
+                }
+                .buttonStyle(WolfenceActionButtonStyle(tone: WolfenceTheme.action, prominence: .primary))
+            }
+        }
+        .padding(24)
+        .frame(width: 440)
+    }
+
+    private var iconPreview: some View {
+        ZStack {
+            if let imagePath, let image = NSImage(contentsOfFile: imagePath) {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(RepositoryIconTint(selectedColor).color)
+
+                Text(previewSymbol)
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.white)
+            }
+        }
+        .frame(width: 80, height: 80)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var previewSymbol: String {
+        let trimmed = symbol.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return String(trimmed.prefix(2))
+        }
+        return String(repository.shortName.prefix(2).uppercased())
+    }
+
+    private func chooseImage() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.image]
+        panel.prompt = "Choose Icon"
+
+        if panel.runModal() == .OK {
+            imagePath = panel.url?.path
+        }
+    }
+}
+
+private struct RepositoryIconCustomization: Codable, Equatable {
+    var symbol: String = ""
+    var color: RepositoryIconTint = .action
+    var imagePath: String?
+
+    static let empty = RepositoryIconCustomization()
+
+    var isEmpty: Bool {
+        symbol.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && imagePath == nil && color == .action
+    }
+}
+
+private struct RepositoryIconTint: Codable, Equatable {
+    var red: Double
+    var green: Double
+    var blue: Double
+    var opacity: Double
+
+    init(red: Double, green: Double, blue: Double, opacity: Double = 1) {
+        self.red = red
+        self.green = green
+        self.blue = blue
+        self.opacity = opacity
+    }
+
+    init(_ color: Color) {
+        let resolved = NSColor(color)
+        let converted = resolved.usingColorSpace(.deviceRGB) ?? NSColor.controlAccentColor
+        self.red = Double(converted.redComponent)
+        self.green = Double(converted.greenComponent)
+        self.blue = Double(converted.blueComponent)
+        self.opacity = Double(converted.alphaComponent)
+    }
+
+    var color: Color {
+        Color(.sRGB, red: red, green: green, blue: blue, opacity: opacity)
+    }
+
+    static let action = RepositoryIconTint(red: 0.14, green: 0.26, blue: 0.44)
+    static let alert = RepositoryIconTint(red: 0.66, green: 0.25, blue: 0.22)
 }
 
 private struct InfoRow: View {

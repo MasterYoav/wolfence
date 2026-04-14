@@ -99,6 +99,20 @@ pub fn today_utc_date() -> String {
     current_utc_date()
 }
 
+/// Returns the ISO date that is `days` after `start`.
+pub fn iso_date_after_days(start: &str, days: u32) -> Option<String> {
+    let start_days = parse_iso_date_to_days(start)?;
+    let (year, month, day) = civil_from_days(start_days + i64::from(days));
+    Some(format!("{year:04}-{month:02}-{day:02}"))
+}
+
+/// Returns the number of whole days between `created_on` and `expires_on`.
+pub fn iso_date_lifetime_days(created_on: &str, expires_on: &str) -> Option<u32> {
+    let created_days = parse_iso_date_to_days(created_on)?;
+    let expires_days = parse_iso_date_to_days(expires_on)?;
+    Some(expires_days.saturating_sub(created_days) as u32)
+}
+
 impl ReceiptIndex {
     /// Loads and validates repo-local override receipts.
     pub fn load_for_repo(repo_root: &Path) -> AppResult<Self> {
@@ -732,11 +746,8 @@ fn validate_against_approval_policy(
     }
 
     if let Some(max_lifetime_days) = policy.max_lifetime_days {
-        let created_days = parse_iso_date_to_days(created_on)
-            .ok_or_else(|| "receipt creation date could not be evaluated.".to_string())?;
-        let expires_days = parse_iso_date_to_days(expires_on)
-            .ok_or_else(|| "receipt expiry date could not be evaluated.".to_string())?;
-        let lifetime_days = expires_days.saturating_sub(created_days) as u32;
+        let lifetime_days = iso_date_lifetime_days(created_on, expires_on)
+            .ok_or_else(|| "receipt lifetime could not be evaluated.".to_string())?;
         if lifetime_days > max_lifetime_days {
             return Err(format!(
                 "receipt lifetime of {lifetime_days} day(s) exceeds the policy maximum of {max_lifetime_days}."

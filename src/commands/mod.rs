@@ -6,6 +6,7 @@
 //! a background daemon.
 
 mod audit;
+mod baseline;
 mod config;
 mod doctor;
 mod hook_pre_push;
@@ -31,6 +32,7 @@ pub fn execute(command: Command) -> AppResult<ExitCode> {
         Command::Scan(command) => scan::run(command),
         Command::Doctor { json } => doctor::run(json),
         Command::Config => config::run(),
+        Command::Baseline(command) => baseline::run(command),
         Command::Receipt(command) => receipt::run(command),
         Command::Trust(command) => trust::run(command),
         Command::Audit(command) => audit::run(command),
@@ -61,6 +63,7 @@ fn print_help() {
     println!("  scan     Run the local scan pipeline without taking Git side effects (`--json` supported)");
     println!("  doctor   Inspect local prerequisites and repository state (`--json` supported)");
     println!("  config   Explain configuration surfaces and intended ownership");
+    println!("  baseline Capture, inspect, or clear the accepted starting finding set");
     println!(
         "  receipt  List, create, verify, archive, checksum, and sign reviewable override receipts"
     );
@@ -75,6 +78,7 @@ fn print_help() {
     print_trust_help_summary();
     print_audit_help_summary();
     print_scan_help_summary();
+    print_baseline_help_summary();
 }
 
 fn print_receipt_help_summary() {
@@ -107,4 +111,11 @@ fn print_scan_help_summary() {
     println!("  scan [--json]");
     println!("  scan staged [--json]");
     println!("  scan push [--json]");
+}
+
+fn print_baseline_help_summary() {
+    println!("Baseline Commands:");
+    println!("  baseline capture [push|staged]");
+    println!("  baseline show");
+    println!("  baseline clear");
 }

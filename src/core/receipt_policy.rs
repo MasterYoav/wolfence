@@ -299,6 +299,12 @@ pub fn default_receipt_policy() -> &'static str {
 #
 # This file constrains who can review or approve override receipts and how
 # long they may stay active.
+#
+# Recommended production starting posture:
+# - set `require_explicit_category = true`
+# - set `require_reviewer_metadata = true`
+# - set `max_lifetime_days` to a small number such as 7
+# - require signed receipts for high-risk categories like `secret` and `policy`
 
 # Maximum number of days between `created_on` and `expires_on`.
 # max_lifetime_days = 14

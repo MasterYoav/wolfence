@@ -1,0 +1,39 @@
+{
+  "prepare": "commit",
+  "upstream_fixture": "__upstream__",
+  "expectations": {
+    "push": {
+      "verdict": "block",
+      "finding_ids": [
+        "policy.wolfence.receipt-changed",
+        "policy.repo.codeowners.uncovered-sensitive-path"
+      ],
+      "not_finding_ids": [
+        "policy.repo.codeowners.missing"
+      ],
+      "json": {
+        "status": "ready",
+        "result": "blocked",
+        "has_report": true,
+        "has_decision": true,
+        "has_finding_history": true,
+        "has_finding_baseline": true,
+        "receipt_issue_count": 0,
+        "receipt_overrides_applied": 0
+      },
+      "audit": {
+        "entries": 1,
+        "healthy": true,
+        "outcomes": [
+          "blocked"
+        ],
+        "overrides_applied": [
+          0
+        ],
+        "receipt_issues": [
+          0
+        ]
+      }
+    }
+  }
+}

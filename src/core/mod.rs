@@ -7,8 +7,11 @@
 pub mod audit;
 pub mod config;
 pub mod context;
+pub mod finding_baseline;
+pub mod finding_history;
 pub mod findings;
 pub mod git;
+pub mod github_governance;
 pub mod hooks;
 pub mod orchestrator;
 pub mod osv;

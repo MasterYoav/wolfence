@@ -88,6 +88,23 @@ Category-specific sections override the repo-wide settings for that finding
 class. This matters when secret or policy exceptions need tighter review than
 dependency or configuration exceptions.
 
+## Operator Guidance
+
+`wolf receipt new` now preflights new drafts against the effective category
+policy earlier in the workflow.
+
+That means the command will now:
+
+- reject receipt lifetimes that already exceed `max_lifetime_days`
+- accept `auto` and `+<days>d` for `expires_on`
+- print the effective signing, reviewer, approver, and key-id requirements for
+  the selected category
+- print the next expected step, usually `wolf receipt sign ...`, when the repo
+  or category requires signed governance
+
+In practice, this keeps exception creation from drifting into a state that only
+fails later during `receipt verify`, `scan`, or `push`.
+
 ## Interaction With Signed Receipts
 
 The receipt approval policy is separate from the trust store:

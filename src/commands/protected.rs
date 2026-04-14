@@ -6,8 +6,11 @@
 
 use crate::app::AppResult;
 use crate::core::context::{ExecutionContext, ProtectedAction};
+use crate::core::finding_baseline;
+use crate::core::finding_history;
 use crate::core::findings::{Finding, FindingCategory, Severity};
-use crate::core::git::PushStatus;
+use crate::core::git::{self, PushStatus};
+use crate::core::github_governance;
 use crate::core::orchestrator::{Orchestrator, ScanReport};
 use crate::core::policy::{OverriddenFinding, PolicyDecision, PolicyFinding};
 use crate::core::receipts::ReceiptIssue;
@@ -27,6 +30,7 @@ pub enum PushEvaluation {
         context: ExecutionContext,
         report: ScanReport,
         decision: PolicyDecision,
+        push_status: PushStatus,
         current_branch: String,
         upstream_branch: Option<String>,
         commits_ahead: usize,
@@ -40,7 +44,7 @@ pub fn evaluate_push_action() -> AppResult<PushEvaluation> {
         return Ok(PushEvaluation::UpToDate { context });
     };
 
-    match push_status {
+    match &push_status {
         PushStatus::NoCommits => Ok(PushEvaluation::NoCommits { context }),
         PushStatus::UpToDate => Ok(PushEvaluation::UpToDate { context }),
         PushStatus::Ready {
@@ -49,19 +53,47 @@ pub fn evaluate_push_action() -> AppResult<PushEvaluation> {
             commits_ahead,
             ..
         } => {
-            let report = Orchestrator::default().run(&context)?;
+            let mut report = Orchestrator::default().run(&context)?;
+            inject_live_github_governance(&context, &mut report)?;
+            let history =
+                finding_history::annotate_findings(&context.repo_root, &mut report.findings);
+            report.set_finding_history(history);
+            let baseline =
+                finding_baseline::annotate_findings(&context.repo_root, &mut report.findings);
+            report.set_finding_baseline(baseline);
             let decision = report.evaluate(context.config.mode, &context.receipts, context.action);
 
             Ok(PushEvaluation::Ready {
                 context,
                 report,
                 decision,
+                push_status: push_status.clone(),
                 current_branch: current_branch.clone(),
                 upstream_branch: upstream_branch.clone(),
-                commits_ahead,
+                commits_ahead: *commits_ahead,
             })
         }
     }
+}
+
+/// Rechecks the outbound push snapshot before the final transport side effect.
+pub fn verify_ready_push_snapshot(
+    context: &ExecutionContext,
+    expected: &PushStatus,
+) -> AppResult<()> {
+    git::verify_push_status_unchanged(&context.repo_root, expected)
+}
+
+fn inject_live_github_governance(
+    context: &ExecutionContext,
+    report: &mut ScanReport,
+) -> AppResult<()> {
+    let Some(finding) = github_governance::push_blocking_finding(&context.repo_root)? else {
+        return Ok(());
+    };
+
+    report.include_findings([finding]);
+    Ok(())
 }
 
 /// Prints a consistent finding breakdown for protected push decisions.
@@ -127,6 +159,34 @@ pub fn print_finding_summary(findings: &[Finding]) {
     );
 }
 
+pub fn print_finding_history(report: &ScanReport) {
+    if report.findings.is_empty() {
+        return;
+    }
+
+    println!(
+        "  finding history: {} new, {} recurring",
+        report.finding_history.new_findings, report.finding_history.recurring_findings
+    );
+    if let Some(issue) = &report.finding_history.issue {
+        println!("  finding history issue: {issue}");
+    }
+}
+
+pub fn print_finding_baseline(report: &ScanReport) {
+    if report.findings.is_empty() {
+        return;
+    }
+
+    println!(
+        "  finding baseline: {} accepted, {} not accepted",
+        report.finding_baseline.accepted_findings, report.finding_baseline.unaccepted_findings
+    );
+    if let Some(issue) = &report.finding_baseline.issue {
+        println!("  finding baseline issue: {issue}");
+    }
+}
+
 /// Prints ignored receipt issues so the operator can see why an override did not apply.
 pub fn print_receipt_issues(issues: &[ReceiptIssue]) {
     if issues.is_empty() {
@@ -144,6 +204,7 @@ pub fn print_receipt_issues(issues: &[ReceiptIssue]) {
 fn print_finding_group(findings: &[PolicyFinding]) {
     for policy_finding in findings {
         let finding = &policy_finding.finding;
+        let remediation = &finding.remediation_advice;
         println!(
             "    - [{}|{}|{}] {}",
             finding.severity, finding.confidence, finding.category, finding.title
@@ -151,6 +212,26 @@ fn print_finding_group(findings: &[PolicyFinding]) {
         println!("      scanner: {}", finding.scanner);
         println!("      location: {}", finding.location());
         println!("      detail: {}", finding.detail);
+        println!("      fingerprint: {}", finding.fingerprint);
+        println!(
+            "      baseline: {}",
+            if finding.baseline.accepted {
+                "accepted-starting-state"
+            } else {
+                "not-in-baseline"
+            }
+        );
+        println!("      action: {}", remediation.primary_action);
+        println!(
+            "      urgency: {}, owner: {}",
+            remediation.urgency, remediation.owner_surface
+        );
+        if let Some(command) = &remediation.primary_command {
+            println!("      command: {command}");
+        }
+        if let Some(docs_ref) = &remediation.docs_ref {
+            println!("      docs: {docs_ref}");
+        }
         println!("      remediation: {}", finding.remediation);
         println!("      policy: {}", policy_finding.rationale);
     }
@@ -167,6 +248,15 @@ fn print_overridden_group(findings: &[OverriddenFinding]) {
         );
         println!("      scanner: {}", overridden.finding.scanner);
         println!("      location: {}", overridden.finding.location());
+        println!("      fingerprint: {}", overridden.finding.fingerprint);
+        println!(
+            "      baseline: {}",
+            if overridden.finding.baseline.accepted {
+                "accepted-starting-state"
+            } else {
+                "not-in-baseline"
+            }
+        );
         println!("      receipt: {}", overridden.receipt.path.display());
         println!("      owner: {}", overridden.receipt.owner);
         if let Some(approver) = &overridden.receipt.approver {

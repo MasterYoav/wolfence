@@ -10,9 +10,12 @@ use crate::app::AppResult;
 use serde::Serialize;
 
 use super::context::ExecutionContext;
+use super::finding_baseline::FindingBaselineSummary;
+use super::finding_history::FindingHistorySummary;
 use super::findings::{Confidence, Finding, FindingCategory, Severity};
 use super::scanners::{
-    BasicSastScanner, ConfigScanner, DependencyScanner, PolicyScanner, Scanner, SecretScanner,
+    ArtifactScanner, BasicSastScanner, ConfigScanner, DependencyScanner, PolicyScanner, Scanner,
+    SecretScanner,
 };
 
 /// Final scan output for one invocation.
@@ -23,6 +26,24 @@ pub struct ScanReport {
     pub scanned_files: usize,
     pub ignored_files: usize,
     pub scanners_run: usize,
+    pub finding_history: FindingHistorySummary,
+    pub finding_baseline: FindingBaselineSummary,
+}
+
+impl ScanReport {
+    /// Adds findings after orchestration and keeps the report normalized.
+    pub fn include_findings(&mut self, findings: impl IntoIterator<Item = Finding>) {
+        self.findings.extend(findings);
+        normalize_findings(&mut self.findings);
+    }
+
+    pub fn set_finding_history(&mut self, summary: FindingHistorySummary) {
+        self.finding_history = summary;
+    }
+
+    pub fn set_finding_baseline(&mut self, summary: FindingBaselineSummary) {
+        self.finding_baseline = summary;
+    }
 }
 
 /// Coordinates scanner execution.
@@ -36,6 +57,7 @@ impl Default for Orchestrator {
             scanners: vec![
                 Box::new(SecretScanner),
                 Box::new(BasicSastScanner),
+                Box::new(ArtifactScanner),
                 Box::new(DependencyScanner),
                 Box::new(ConfigScanner),
                 Box::new(PolicyScanner),
@@ -63,6 +85,8 @@ impl Orchestrator {
                 .discovered_candidate_files
                 .saturating_sub(context.candidate_files.len()),
             scanners_run: self.scanners.len(),
+            finding_history: FindingHistorySummary::default(),
+            finding_baseline: FindingBaselineSummary::default(),
         })
     }
 }
@@ -189,6 +213,13 @@ mod tests {
                 repo_config_path: PathBuf::from(".wolfence/config.toml"),
                 repo_config_exists: true,
                 scan_ignore_paths: vec!["docs/".to_string()],
+                node_internal_packages: Vec::new(),
+                node_internal_package_prefixes: Vec::new(),
+                node_registry_ownership: Vec::new(),
+                ruby_source_ownership: Vec::new(),
+                python_internal_packages: Vec::new(),
+                python_internal_package_prefixes: Vec::new(),
+                python_index_ownership: Vec::new(),
             },
             receipts: ReceiptIndex::default(),
             push_status: None,
@@ -201,5 +232,10 @@ mod tests {
         assert_eq!(report.discovered_files, 3);
         assert_eq!(report.scanned_files, 1);
         assert_eq!(report.ignored_files, 2);
+        assert_eq!(report.scanners_run, 6);
+        assert_eq!(report.finding_history.new_findings, 0);
+        assert_eq!(report.finding_history.recurring_findings, 0);
+        assert_eq!(report.finding_baseline.accepted_findings, 0);
+        assert_eq!(report.finding_baseline.unaccepted_findings, 0);
     }
 }

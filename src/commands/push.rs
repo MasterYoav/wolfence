@@ -167,6 +167,7 @@ fn run_internal(json: bool) -> AppResult<ExitCode> {
             context,
             report,
             decision,
+            push_status,
             current_branch,
             upstream_branch,
             commits_ahead,
@@ -252,6 +253,52 @@ fn run_internal(json: bool) -> AppResult<ExitCode> {
                         return Ok(ExitCode::SUCCESS);
                     }
                     Verdict::Allow | Verdict::Warn => {
+                        if let Err(error) =
+                            protected::verify_ready_push_snapshot(&context, &push_status)
+                        {
+                            let detail = error.to_string();
+                            audit::append_audit_event(
+                                &context.repo_root,
+                                AuditEvent {
+                                    source: AuditSource::PushCommand,
+                                    action: context.action,
+                                    status: "ready",
+                                    outcome: "push-failed",
+                                    detail: Some(detail.clone()),
+                                    verdict: Some(decision.verdict),
+                                    discovered_files: report.discovered_files,
+                                    candidate_files: report.scanned_files,
+                                    ignored_files: report.ignored_files,
+                                    findings: report.findings.len(),
+                                    warnings: decision.warning_findings.len(),
+                                    blocks: decision.blocking_findings.len(),
+                                    overrides_applied: decision.overridden_findings.len(),
+                                    receipt_issues: context.receipts.issues.len(),
+                                    branch: Some(current_branch.clone()),
+                                    upstream: upstream_branch.clone(),
+                                    commits_ahead: Some(commits_ahead),
+                                },
+                            )?;
+                            print_json(&JsonPushResponse {
+                                command: "push",
+                                action: "push",
+                                repo_root: context.repo_root.display().to_string(),
+                                mode: Some(context.config.mode.to_string()),
+                                mode_source: Some(context.config.mode_source.to_string()),
+                                status: "ready",
+                                branch: Some(current_branch),
+                                upstream: upstream_branch,
+                                commits_ahead: Some(commits_ahead),
+                                report: Some(report),
+                                decision: Some(decision),
+                                scan_scope: Some(scan_scope),
+                                receipt_issues: context.receipts.issues.clone(),
+                                outcome: "push-failed",
+                                git_error: Some(detail),
+                            })?;
+                            return Ok(ExitCode::FAILURE);
+                        }
+
                         match git::push(
                             &context.repo_root,
                             &current_branch,
@@ -365,6 +412,8 @@ fn run_internal(json: bool) -> AppResult<ExitCode> {
             protected::print_scan_scope(&report, &context);
             println!("  findings: {}", report.findings.len());
             protected::print_finding_summary(&report.findings);
+            protected::print_finding_history(&report);
+            protected::print_finding_baseline(&report);
             println!("  warnings: {}", decision.warning_findings.len());
             println!("  blocks: {}", decision.blocking_findings.len());
             println!(
@@ -381,6 +430,37 @@ fn run_internal(json: bool) -> AppResult<ExitCode> {
                     if dry_run_enabled() {
                         println!("  result: policy allowed the push, but git push was skipped because WOLFENCE_DRY_RUN=1");
                         return Ok(ExitCode::SUCCESS);
+                    }
+
+                    if let Err(error) =
+                        protected::verify_ready_push_snapshot(&context, &push_status)
+                    {
+                        let detail = error.to_string();
+                        audit::append_audit_event(
+                            &context.repo_root,
+                            AuditEvent {
+                                source: AuditSource::PushCommand,
+                                action: context.action,
+                                status: "ready",
+                                outcome: "push-failed",
+                                detail: Some(detail.clone()),
+                                verdict: Some(decision.verdict),
+                                discovered_files: report.discovered_files,
+                                candidate_files: report.scanned_files,
+                                ignored_files: report.ignored_files,
+                                findings: report.findings.len(),
+                                warnings: decision.warning_findings.len(),
+                                blocks: decision.blocking_findings.len(),
+                                overrides_applied: decision.overridden_findings.len(),
+                                receipt_issues: context.receipts.issues.len(),
+                                branch: Some(current_branch.clone()),
+                                upstream: upstream_branch.clone(),
+                                commits_ahead: Some(commits_ahead),
+                            },
+                        )?;
+                        println!("  result: policy allowed the push, but the outbound snapshot changed before transport");
+                        println!("  git: {detail}");
+                        return Ok(ExitCode::FAILURE);
                     }
 
                     match git::push(
@@ -469,8 +549,20 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::run;
+    use crate::commands::protected::{self, PushEvaluation};
     use crate::core::audit::{verify_audit_log, AUDIT_LOG_RELATIVE_PATH};
-    use crate::test_support::process_lock;
+    use crate::core::context::ProtectedAction;
+    use crate::core::findings::FindingCategory;
+    use crate::core::github_governance;
+    use crate::core::receipts::{
+        draft_checksum, generate_receipt_id, render_receipt_file, ReceiptDraft,
+        RECEIPTS_DIR_RELATIVE_PATH,
+    };
+    use crate::test_support::{
+        activate_live_github_governance_fixture, assert_fixture_audit_expectation,
+        assert_fixture_expectation, install_live_github_governance_receipt,
+        materialize_repo_fixture, process_lock, restore_live_github_governance_fixture,
+    };
 
     #[test]
     fn push_blocks_high_confidence_secret_candidates() {
@@ -491,7 +583,7 @@ mod tests {
 
         let result = run(false).expect("push command should run");
 
-        restore_process_state(&previous_dir, previous_dry_run);
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
         assert_eq!(result, std::process::ExitCode::FAILURE);
     }
 
@@ -514,7 +606,7 @@ mod tests {
 
         let result = run(false).expect("push command should run");
 
-        restore_process_state(&previous_dir, previous_dry_run);
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
         assert_eq!(result, std::process::ExitCode::SUCCESS);
     }
 
@@ -542,7 +634,7 @@ mod tests {
 
         let result = run(false).expect("push command should run");
 
-        restore_process_state(&previous_dir, previous_dry_run);
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
         assert_eq!(result, std::process::ExitCode::SUCCESS);
     }
 
@@ -565,7 +657,7 @@ mod tests {
 
         let result = run(false).expect("push command should handle git failure gracefully");
 
-        restore_process_state(&previous_dir, previous_dry_run);
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
         assert_eq!(result, std::process::ExitCode::FAILURE);
 
         let audit_log = fs::read_to_string(repo_root.join(AUDIT_LOG_RELATIVE_PATH))
@@ -579,12 +671,1088 @@ mod tests {
         assert_eq!(verification.entries, 2);
     }
 
-    fn restore_process_state(previous_dir: &Path, previous_dry_run: Option<String>) {
+    #[test]
+    fn push_fixture_captures_policy_allowed_transport_failure_audit_chain() {
+        let _guard = process_lock();
+        let fixture = materialize_repo_fixture("push-transport-failure-no-remote");
+        let repo_root = fixture.repo_root.clone();
+
+        let previous_dir = env::current_dir().expect("current dir should resolve");
+        let previous_dry_run = env::var("WOLFENCE_DRY_RUN").ok();
+        env::set_current_dir(&repo_root).expect("should enter fixture repo");
+        env::remove_var("WOLFENCE_DRY_RUN");
+
+        let result = run(false).expect("push command should handle transport failure");
+        let findings = load_push_report_findings();
+
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
+        assert_fixture_expectation(
+            &fixture.name,
+            "push",
+            result,
+            &findings,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .expect("fixture should declare push expectations"),
+        );
+        assert_fixture_audit_expectation(
+            &fixture.name,
+            "push",
+            &repo_root,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .and_then(|expectation| expectation.audit.as_ref())
+                .expect("fixture should declare push audit expectations"),
+        );
+    }
+
+    #[test]
+    fn push_blocks_when_live_github_governance_drifts() {
+        let _guard = process_lock();
+        let repo_root = make_temp_repo("push-governance-drift-block");
+        initialize_repo(&repo_root);
+        configure_live_governance_repo(&repo_root);
+
+        let previous_dir = env::current_dir().expect("current dir should resolve");
+        let previous_dry_run = env::var("WOLFENCE_DRY_RUN").ok();
+        let previous_governance = env::var("WOLFENCE_GITHUB_GOVERNANCE").ok();
+        let previous_path = env::var("PATH").ok();
+        let fake_bin = install_fake_gh(&repo_root, false);
+        env::set_current_dir(&repo_root).expect("should enter repo");
+        env::set_var("WOLFENCE_DRY_RUN", "1");
+        env::set_var("WOLFENCE_GITHUB_GOVERNANCE", "auto");
+        set_test_path(&fake_bin, previous_path.as_deref());
+
+        let result = run(false).expect("push command should run");
+
+        restore_process_state(
+            &previous_dir,
+            previous_dry_run,
+            previous_governance,
+            previous_path,
+        );
+        assert_eq!(result, std::process::ExitCode::FAILURE);
+    }
+
+    #[test]
+    fn push_allows_receipted_live_github_governance_drift() {
+        let _guard = process_lock();
+        let repo_root = make_temp_repo("push-governance-drift-override");
+        initialize_repo(&repo_root);
+        configure_live_governance_repo(&repo_root);
+        install_governance_override_receipt(&repo_root);
+
+        let previous_dir = env::current_dir().expect("current dir should resolve");
+        let previous_dry_run = env::var("WOLFENCE_DRY_RUN").ok();
+        let previous_governance = env::var("WOLFENCE_GITHUB_GOVERNANCE").ok();
+        let previous_path = env::var("PATH").ok();
+        let fake_bin = install_fake_gh(&repo_root, false);
+        env::set_current_dir(&repo_root).expect("should enter repo");
+        env::set_var("WOLFENCE_DRY_RUN", "1");
+        env::set_var("WOLFENCE_GITHUB_GOVERNANCE", "auto");
+        set_test_path(&fake_bin, previous_path.as_deref());
+
+        let result = run(false).expect("push command should run");
+
+        restore_process_state(
+            &previous_dir,
+            previous_dry_run,
+            previous_governance,
+            previous_path,
+        );
+        assert_eq!(result, std::process::ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn push_blocks_fixture_repo_with_committed_secret_in_dry_run_mode() {
+        let _guard = process_lock();
+        let fixture = materialize_repo_fixture("push-blocking-secret");
+        let repo_root = fixture.repo_root.clone();
+
+        let previous_dir = env::current_dir().expect("current dir should resolve");
+        let previous_dry_run = env::var("WOLFENCE_DRY_RUN").ok();
+        env::set_current_dir(&repo_root).expect("should enter fixture repo");
+        env::set_var("WOLFENCE_DRY_RUN", "1");
+
+        let result = run(false).expect("push command should run");
+        let findings = load_push_report_findings();
+
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
+        assert_fixture_expectation(
+            &fixture.name,
+            "push",
+            result,
+            &findings,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .expect("fixture should declare push expectations"),
+        );
+        assert_fixture_audit_expectation(
+            &fixture.name,
+            "push",
+            &repo_root,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .and_then(|expectation| expectation.audit.as_ref())
+                .expect("fixture should declare push audit expectations"),
+        );
+    }
+
+    #[test]
+    fn push_allows_fixture_repo_with_harmless_committed_content_in_dry_run_mode() {
+        let _guard = process_lock();
+        let fixture = materialize_repo_fixture("push-allow-readme");
+        let repo_root = fixture.repo_root.clone();
+
+        let previous_dir = env::current_dir().expect("current dir should resolve");
+        let previous_dry_run = env::var("WOLFENCE_DRY_RUN").ok();
+        env::set_current_dir(&repo_root).expect("should enter fixture repo");
+        env::set_var("WOLFENCE_DRY_RUN", "1");
+
+        let result = run(false).expect("push command should run");
+        let findings = load_push_report_findings();
+
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
+        assert_fixture_expectation(
+            &fixture.name,
+            "push",
+            result,
+            &findings,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .expect("fixture should declare push expectations"),
+        );
+        assert_fixture_audit_expectation(
+            &fixture.name,
+            "push",
+            &repo_root,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .and_then(|expectation| expectation.audit.as_ref())
+                .expect("fixture should declare push audit expectations"),
+        );
+    }
+
+    #[test]
+    fn push_allows_fixture_repo_with_receipted_secret_in_dry_run_mode() {
+        let _guard = process_lock();
+        let fixture = materialize_repo_fixture("push-secret-override-receipt");
+        let repo_root = fixture.repo_root.clone();
+
+        let previous_dir = env::current_dir().expect("current dir should resolve");
+        let previous_dry_run = env::var("WOLFENCE_DRY_RUN").ok();
+        env::set_current_dir(&repo_root).expect("should enter fixture repo");
+        env::set_var("WOLFENCE_DRY_RUN", "1");
+
+        let result = run(false).expect("push command should run");
+        let findings = load_push_report_findings();
+
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
+        assert_fixture_expectation(
+            &fixture.name,
+            "push",
+            result,
+            &findings,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .expect("fixture should declare push expectations"),
+        );
+        assert_fixture_audit_expectation(
+            &fixture.name,
+            "push",
+            &repo_root,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .and_then(|expectation| expectation.audit.as_ref())
+                .expect("fixture should declare push audit expectations"),
+        );
+    }
+
+    #[test]
+    fn push_blocks_fixture_repo_when_trust_requires_signed_receipts() {
+        let _guard = process_lock();
+        let fixture = materialize_repo_fixture("push-secret-trust-requires-signature");
+        let repo_root = fixture.repo_root.clone();
+
+        let previous_dir = env::current_dir().expect("current dir should resolve");
+        let previous_dry_run = env::var("WOLFENCE_DRY_RUN").ok();
+        env::set_current_dir(&repo_root).expect("should enter fixture repo");
+        env::set_var("WOLFENCE_DRY_RUN", "1");
+
+        let result = run(false).expect("push command should run");
+        let findings = load_push_report_findings();
+
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
+        assert_fixture_expectation(
+            &fixture.name,
+            "push",
+            result,
+            &findings,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .expect("fixture should declare push expectations"),
+        );
+        assert_fixture_audit_expectation(
+            &fixture.name,
+            "push",
+            &repo_root,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .and_then(|expectation| expectation.audit.as_ref())
+                .expect("fixture should declare push audit expectations"),
+        );
+    }
+
+    #[test]
+    fn push_allows_fixture_repo_with_signed_trusted_secret_receipt() {
+        let _guard = process_lock();
+        let fixture = materialize_repo_fixture("push-secret-trust-valid-signed");
+        let repo_root = fixture.repo_root.clone();
+
+        let previous_dir = env::current_dir().expect("current dir should resolve");
+        let previous_dry_run = env::var("WOLFENCE_DRY_RUN").ok();
+        env::set_current_dir(&repo_root).expect("should enter fixture repo");
+        env::set_var("WOLFENCE_DRY_RUN", "1");
+
+        let result = run(false).expect("push command should run");
+        let findings = load_push_report_findings();
+
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
+        assert_fixture_expectation(
+            &fixture.name,
+            "push",
+            result,
+            &findings,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .expect("fixture should declare push expectations"),
+        );
+        assert_fixture_audit_expectation(
+            &fixture.name,
+            "push",
+            &repo_root,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .and_then(|expectation| expectation.audit.as_ref())
+                .expect("fixture should declare push audit expectations"),
+        );
+    }
+
+    #[test]
+    fn push_blocks_fixture_repo_when_secret_receipt_policy_requires_reviewer_metadata() {
+        let _guard = process_lock();
+        let fixture = materialize_repo_fixture("push-secret-policy-reviewer-required");
+        let repo_root = fixture.repo_root.clone();
+
+        let previous_dir = env::current_dir().expect("current dir should resolve");
+        let previous_dry_run = env::var("WOLFENCE_DRY_RUN").ok();
+        env::set_current_dir(&repo_root).expect("should enter fixture repo");
+        env::set_var("WOLFENCE_DRY_RUN", "1");
+
+        let result = run(false).expect("push command should run");
+        let findings = load_push_report_findings();
+
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
+        assert_fixture_expectation(
+            &fixture.name,
+            "push",
+            result,
+            &findings,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .expect("fixture should declare push expectations"),
+        );
+        assert_fixture_audit_expectation(
+            &fixture.name,
+            "push",
+            &repo_root,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .and_then(|expectation| expectation.audit.as_ref())
+                .expect("fixture should declare push audit expectations"),
+        );
+    }
+
+    #[test]
+    fn push_blocks_fixture_repo_when_secret_reviewer_is_not_allowlisted() {
+        let _guard = process_lock();
+        let fixture = materialize_repo_fixture("push-secret-policy-reviewer-disallowed");
+        let repo_root = fixture.repo_root.clone();
+
+        let previous_dir = env::current_dir().expect("current dir should resolve");
+        let previous_dry_run = env::var("WOLFENCE_DRY_RUN").ok();
+        env::set_current_dir(&repo_root).expect("should enter fixture repo");
+        env::set_var("WOLFENCE_DRY_RUN", "1");
+
+        let result = run(false).expect("push command should run");
+        let findings = load_push_report_findings();
+
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
+        assert_fixture_expectation(
+            &fixture.name,
+            "push",
+            result,
+            &findings,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .expect("fixture should declare push expectations"),
+        );
+        assert_fixture_audit_expectation(
+            &fixture.name,
+            "push",
+            &repo_root,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .and_then(|expectation| expectation.audit.as_ref())
+                .expect("fixture should declare push audit expectations"),
+        );
+    }
+
+    #[test]
+    fn push_allows_fixture_repo_when_secret_reviewer_is_allowlisted() {
+        let _guard = process_lock();
+        let fixture = materialize_repo_fixture("push-secret-policy-reviewer-allowed");
+        let repo_root = fixture.repo_root.clone();
+
+        let previous_dir = env::current_dir().expect("current dir should resolve");
+        let previous_dry_run = env::var("WOLFENCE_DRY_RUN").ok();
+        env::set_current_dir(&repo_root).expect("should enter fixture repo");
+        env::set_var("WOLFENCE_DRY_RUN", "1");
+
+        let result = run(false).expect("push command should run");
+        let findings = load_push_report_findings();
+
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
+        assert_fixture_expectation(
+            &fixture.name,
+            "push",
+            result,
+            &findings,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .expect("fixture should declare push expectations"),
+        );
+        assert_fixture_audit_expectation(
+            &fixture.name,
+            "push",
+            &repo_root,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .and_then(|expectation| expectation.audit.as_ref())
+                .expect("fixture should declare push audit expectations"),
+        );
+    }
+
+    #[test]
+    fn push_blocks_fixture_repo_when_secret_policy_requires_signed_receipts() {
+        let _guard = process_lock();
+        let fixture = materialize_repo_fixture("push-secret-policy-signed-required");
+        let repo_root = fixture.repo_root.clone();
+
+        let previous_dir = env::current_dir().expect("current dir should resolve");
+        let previous_dry_run = env::var("WOLFENCE_DRY_RUN").ok();
+        env::set_current_dir(&repo_root).expect("should enter fixture repo");
+        env::set_var("WOLFENCE_DRY_RUN", "1");
+
+        let result = run(false).expect("push command should run");
+        let findings = load_push_report_findings();
+
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
+        assert_fixture_expectation(
+            &fixture.name,
+            "push",
+            result,
+            &findings,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .expect("fixture should declare push expectations"),
+        );
+        assert_fixture_audit_expectation(
+            &fixture.name,
+            "push",
+            &repo_root,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .and_then(|expectation| expectation.audit.as_ref())
+                .expect("fixture should declare push audit expectations"),
+        );
+    }
+
+    #[test]
+    fn push_allows_fixture_repo_when_signed_receipt_matches_policy_allowlists() {
+        let _guard = process_lock();
+        let fixture = materialize_repo_fixture("push-secret-policy-signed-allowlists-allowed");
+        let repo_root = fixture.repo_root.clone();
+
+        let previous_dir = env::current_dir().expect("current dir should resolve");
+        let previous_dry_run = env::var("WOLFENCE_DRY_RUN").ok();
+        env::set_current_dir(&repo_root).expect("should enter fixture repo");
+        env::set_var("WOLFENCE_DRY_RUN", "1");
+
+        let result = run(false).expect("push command should run");
+        let findings = load_push_report_findings();
+
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
+        assert_fixture_expectation(
+            &fixture.name,
+            "push",
+            result,
+            &findings,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .expect("fixture should declare push expectations"),
+        );
+        assert_fixture_audit_expectation(
+            &fixture.name,
+            "push",
+            &repo_root,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .and_then(|expectation| expectation.audit.as_ref())
+                .expect("fixture should declare push audit expectations"),
+        );
+    }
+
+    #[test]
+    fn push_blocks_fixture_repo_when_signed_receipt_key_id_is_not_allowlisted() {
+        let _guard = process_lock();
+        let fixture = materialize_repo_fixture("push-secret-policy-signed-key-disallowed");
+        let repo_root = fixture.repo_root.clone();
+
+        let previous_dir = env::current_dir().expect("current dir should resolve");
+        let previous_dry_run = env::var("WOLFENCE_DRY_RUN").ok();
+        env::set_current_dir(&repo_root).expect("should enter fixture repo");
+        env::set_var("WOLFENCE_DRY_RUN", "1");
+
+        let result = run(false).expect("push command should run");
+        let findings = load_push_report_findings();
+
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
+        assert_fixture_expectation(
+            &fixture.name,
+            "push",
+            result,
+            &findings,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .expect("fixture should declare push expectations"),
+        );
+        assert_fixture_audit_expectation(
+            &fixture.name,
+            "push",
+            &repo_root,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .and_then(|expectation| expectation.audit.as_ref())
+                .expect("fixture should declare push audit expectations"),
+        );
+    }
+
+    #[test]
+    fn push_blocks_fixture_repo_when_receipt_change_lacks_codeowners_coverage() {
+        let _guard = process_lock();
+        let fixture = materialize_repo_fixture("push-receipt-change-codeowners-uncovered");
+        let repo_root = fixture.repo_root.clone();
+
+        let previous_dir = env::current_dir().expect("current dir should resolve");
+        let previous_dry_run = env::var("WOLFENCE_DRY_RUN").ok();
+        env::set_current_dir(&repo_root).expect("should enter fixture repo");
+        env::set_var("WOLFENCE_DRY_RUN", "1");
+
+        let result = run(false).expect("push command should run");
+        let findings = load_push_report_findings();
+
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
+        assert_fixture_expectation(
+            &fixture.name,
+            "push",
+            result,
+            &findings,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .expect("fixture should declare push expectations"),
+        );
+        assert_fixture_audit_expectation(
+            &fixture.name,
+            "push",
+            &repo_root,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .and_then(|expectation| expectation.audit.as_ref())
+                .expect("fixture should declare push audit expectations"),
+        );
+    }
+
+    #[test]
+    fn push_blocks_fixture_repo_when_receipt_change_is_codeowners_covered() {
+        let _guard = process_lock();
+        let fixture = materialize_repo_fixture("push-receipt-change-codeowners-covered");
+        let repo_root = fixture.repo_root.clone();
+
+        let previous_dir = env::current_dir().expect("current dir should resolve");
+        let previous_dry_run = env::var("WOLFENCE_DRY_RUN").ok();
+        env::set_current_dir(&repo_root).expect("should enter fixture repo");
+        env::set_var("WOLFENCE_DRY_RUN", "1");
+
+        let result = run(false).expect("push command should run");
+        let findings = load_push_report_findings();
+
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
+        assert_fixture_expectation(
+            &fixture.name,
+            "push",
+            result,
+            &findings,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .expect("fixture should declare push expectations"),
+        );
+        assert_fixture_audit_expectation(
+            &fixture.name,
+            "push",
+            &repo_root,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .and_then(|expectation| expectation.audit.as_ref())
+                .expect("fixture should declare push audit expectations"),
+        );
+    }
+
+    #[test]
+    fn push_blocks_fixture_repo_when_release_governance_drift_lacks_codeowners_coverage() {
+        let _guard = process_lock();
+        let fixture = materialize_repo_fixture("push-release-governance-uncovered");
+        let repo_root = fixture.repo_root.clone();
+
+        let previous_dir = env::current_dir().expect("current dir should resolve");
+        let previous_dry_run = env::var("WOLFENCE_DRY_RUN").ok();
+        env::set_current_dir(&repo_root).expect("should enter fixture repo");
+        env::set_var("WOLFENCE_DRY_RUN", "1");
+
+        let result = run(false).expect("push command should run");
+        let findings = load_push_report_findings();
+
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
+        assert_fixture_expectation(
+            &fixture.name,
+            "push",
+            result,
+            &findings,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .expect("fixture should declare push expectations"),
+        );
+        assert_fixture_audit_expectation(
+            &fixture.name,
+            "push",
+            &repo_root,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .and_then(|expectation| expectation.audit.as_ref())
+                .expect("fixture should declare push audit expectations"),
+        );
+    }
+
+    #[test]
+    fn push_blocks_fixture_repo_when_release_governance_drift_is_codeowners_covered() {
+        let _guard = process_lock();
+        let fixture = materialize_repo_fixture("push-release-governance-covered");
+        let repo_root = fixture.repo_root.clone();
+
+        let previous_dir = env::current_dir().expect("current dir should resolve");
+        let previous_dry_run = env::var("WOLFENCE_DRY_RUN").ok();
+        env::set_current_dir(&repo_root).expect("should enter fixture repo");
+        env::set_var("WOLFENCE_DRY_RUN", "1");
+
+        let result = run(false).expect("push command should run");
+        let findings = load_push_report_findings();
+
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
+        assert_fixture_expectation(
+            &fixture.name,
+            "push",
+            result,
+            &findings,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .expect("fixture should declare push expectations"),
+        );
+        assert_fixture_audit_expectation(
+            &fixture.name,
+            "push",
+            &repo_root,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .and_then(|expectation| expectation.audit.as_ref())
+                .expect("fixture should declare push audit expectations"),
+        );
+    }
+
+    #[test]
+    fn push_blocks_fixture_repo_when_live_github_governance_drift_is_detected() {
+        let _guard = process_lock();
+        let fixture = materialize_repo_fixture("push-live-governance-drift-block");
+        let repo_root = fixture.repo_root.clone();
+
+        let previous_dir = env::current_dir().expect("current dir should resolve");
+        let previous_dry_run = env::var("WOLFENCE_DRY_RUN").ok();
+        env::set_current_dir(&repo_root).expect("should enter fixture repo");
+        env::set_var("WOLFENCE_DRY_RUN", "1");
+        let live_state = activate_live_github_governance_fixture(
+            &repo_root,
+            fixture.live_github_governance.as_ref(),
+        );
+
+        let result = run(false).expect("push command should run");
+        let findings = load_push_report_findings();
+
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
+        restore_live_github_governance_fixture(live_state);
+        assert_fixture_expectation(
+            &fixture.name,
+            "push",
+            result,
+            &findings,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .expect("fixture should declare push expectations"),
+        );
+        assert_fixture_audit_expectation(
+            &fixture.name,
+            "push",
+            &repo_root,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .and_then(|expectation| expectation.audit.as_ref())
+                .expect("fixture should declare push audit expectations"),
+        );
+    }
+
+    #[test]
+    fn push_allows_fixture_repo_when_live_github_governance_drift_receipt_matches() {
+        let _guard = process_lock();
+        let fixture = materialize_repo_fixture("push-live-governance-drift-override-allowed");
+        let repo_root = fixture.repo_root.clone();
+
+        let previous_dir = env::current_dir().expect("current dir should resolve");
+        let previous_dry_run = env::var("WOLFENCE_DRY_RUN").ok();
+        env::set_current_dir(&repo_root).expect("should enter fixture repo");
+        env::set_var("WOLFENCE_DRY_RUN", "1");
+        let live_state = activate_live_github_governance_fixture(
+            &repo_root,
+            fixture.live_github_governance.as_ref(),
+        );
+        install_live_github_governance_receipt(
+            &repo_root,
+            fixture.live_github_governance.as_ref(),
+            fixture.live_github_governance_receipt.as_ref(),
+        );
+
+        let result = run(false).expect("push command should run");
+        let findings = load_push_report_findings();
+
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
+        restore_live_github_governance_fixture(live_state);
+        assert_fixture_expectation(
+            &fixture.name,
+            "push",
+            result,
+            &findings,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .expect("fixture should declare push expectations"),
+        );
+        assert_fixture_audit_expectation(
+            &fixture.name,
+            "push",
+            &repo_root,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .and_then(|expectation| expectation.audit.as_ref())
+                .expect("fixture should declare push audit expectations"),
+        );
+    }
+
+    #[test]
+    fn push_blocks_fixture_repo_when_live_github_governance_receipt_is_stale() {
+        let _guard = process_lock();
+        let fixture = materialize_repo_fixture("push-live-governance-drift-override-stale");
+        let repo_root = fixture.repo_root.clone();
+
+        let previous_dir = env::current_dir().expect("current dir should resolve");
+        let previous_dry_run = env::var("WOLFENCE_DRY_RUN").ok();
+        env::set_current_dir(&repo_root).expect("should enter fixture repo");
+        env::set_var("WOLFENCE_DRY_RUN", "1");
+        let live_state = activate_live_github_governance_fixture(
+            &repo_root,
+            fixture.live_github_governance.as_ref(),
+        );
+        install_live_github_governance_receipt(
+            &repo_root,
+            fixture.live_github_governance.as_ref(),
+            fixture.live_github_governance_receipt.as_ref(),
+        );
+
+        let result = run(false).expect("push command should run");
+        let findings = load_push_report_findings();
+
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
+        restore_live_github_governance_fixture(live_state);
+        assert_fixture_expectation(
+            &fixture.name,
+            "push",
+            result,
+            &findings,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .expect("fixture should declare push expectations"),
+        );
+        assert_fixture_audit_expectation(
+            &fixture.name,
+            "push",
+            &repo_root,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .and_then(|expectation| expectation.audit.as_ref())
+                .expect("fixture should declare push audit expectations"),
+        );
+    }
+
+    #[test]
+    fn push_allows_fixture_repo_when_live_github_governance_signed_receipt_matches() {
+        let _guard = process_lock();
+        let fixture =
+            materialize_repo_fixture("push-live-governance-drift-signed-override-allowed");
+        let repo_root = fixture.repo_root.clone();
+
+        let previous_dir = env::current_dir().expect("current dir should resolve");
+        let previous_dry_run = env::var("WOLFENCE_DRY_RUN").ok();
+        env::set_current_dir(&repo_root).expect("should enter fixture repo");
+        env::set_var("WOLFENCE_DRY_RUN", "1");
+        let live_state = activate_live_github_governance_fixture(
+            &repo_root,
+            fixture.live_github_governance.as_ref(),
+        );
+        install_live_github_governance_receipt(
+            &repo_root,
+            fixture.live_github_governance.as_ref(),
+            fixture.live_github_governance_receipt.as_ref(),
+        );
+
+        let result = run(false).expect("push command should run");
+        let findings = load_push_report_findings();
+
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
+        restore_live_github_governance_fixture(live_state);
+        assert_fixture_expectation(
+            &fixture.name,
+            "push",
+            result,
+            &findings,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .expect("fixture should declare push expectations"),
+        );
+        assert_fixture_audit_expectation(
+            &fixture.name,
+            "push",
+            &repo_root,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .and_then(|expectation| expectation.audit.as_ref())
+                .expect("fixture should declare push audit expectations"),
+        );
+    }
+
+    #[test]
+    fn push_blocks_fixture_repo_when_live_github_governance_receipt_is_unsigned_under_trust() {
+        let _guard = process_lock();
+        let fixture =
+            materialize_repo_fixture("push-live-governance-drift-signed-required-unsigned");
+        let repo_root = fixture.repo_root.clone();
+
+        let previous_dir = env::current_dir().expect("current dir should resolve");
+        let previous_dry_run = env::var("WOLFENCE_DRY_RUN").ok();
+        env::set_current_dir(&repo_root).expect("should enter fixture repo");
+        env::set_var("WOLFENCE_DRY_RUN", "1");
+        let live_state = activate_live_github_governance_fixture(
+            &repo_root,
+            fixture.live_github_governance.as_ref(),
+        );
+        install_live_github_governance_receipt(
+            &repo_root,
+            fixture.live_github_governance.as_ref(),
+            fixture.live_github_governance_receipt.as_ref(),
+        );
+
+        let result = run(false).expect("push command should run");
+        let findings = load_push_report_findings();
+
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
+        restore_live_github_governance_fixture(live_state);
+        assert_fixture_expectation(
+            &fixture.name,
+            "push",
+            result,
+            &findings,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .expect("fixture should declare push expectations"),
+        );
+        assert_fixture_audit_expectation(
+            &fixture.name,
+            "push",
+            &repo_root,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .and_then(|expectation| expectation.audit.as_ref())
+                .expect("fixture should declare push audit expectations"),
+        );
+    }
+
+    #[test]
+    fn push_blocks_fixture_repo_when_live_github_governance_signing_key_is_disallowed() {
+        let _guard = process_lock();
+        let fixture = materialize_repo_fixture("push-live-governance-drift-signed-key-disallowed");
+        let repo_root = fixture.repo_root.clone();
+
+        let previous_dir = env::current_dir().expect("current dir should resolve");
+        let previous_dry_run = env::var("WOLFENCE_DRY_RUN").ok();
+        env::set_current_dir(&repo_root).expect("should enter fixture repo");
+        env::set_var("WOLFENCE_DRY_RUN", "1");
+        let live_state = activate_live_github_governance_fixture(
+            &repo_root,
+            fixture.live_github_governance.as_ref(),
+        );
+        install_live_github_governance_receipt(
+            &repo_root,
+            fixture.live_github_governance.as_ref(),
+            fixture.live_github_governance_receipt.as_ref(),
+        );
+
+        let result = run(false).expect("push command should run");
+        let findings = load_push_report_findings();
+
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
+        restore_live_github_governance_fixture(live_state);
+        assert_fixture_expectation(
+            &fixture.name,
+            "push",
+            result,
+            &findings,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .expect("fixture should declare push expectations"),
+        );
+        assert_fixture_audit_expectation(
+            &fixture.name,
+            "push",
+            &repo_root,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .and_then(|expectation| expectation.audit.as_ref())
+                .expect("fixture should declare push audit expectations"),
+        );
+    }
+
+    #[test]
+    fn push_blocks_fixture_repo_when_live_github_governance_signing_key_is_untrusted() {
+        let _guard = process_lock();
+        let fixture = materialize_repo_fixture("push-live-governance-drift-signed-key-untrusted");
+        let repo_root = fixture.repo_root.clone();
+
+        let previous_dir = env::current_dir().expect("current dir should resolve");
+        let previous_dry_run = env::var("WOLFENCE_DRY_RUN").ok();
+        env::set_current_dir(&repo_root).expect("should enter fixture repo");
+        env::set_var("WOLFENCE_DRY_RUN", "1");
+        let live_state = activate_live_github_governance_fixture(
+            &repo_root,
+            fixture.live_github_governance.as_ref(),
+        );
+        install_live_github_governance_receipt(
+            &repo_root,
+            fixture.live_github_governance.as_ref(),
+            fixture.live_github_governance_receipt.as_ref(),
+        );
+
+        let result = run(false).expect("push command should run");
+        let findings = load_push_report_findings();
+
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
+        restore_live_github_governance_fixture(live_state);
+        assert_fixture_expectation(
+            &fixture.name,
+            "push",
+            result,
+            &findings,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .expect("fixture should declare push expectations"),
+        );
+        assert_fixture_audit_expectation(
+            &fixture.name,
+            "push",
+            &repo_root,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .and_then(|expectation| expectation.audit.as_ref())
+                .expect("fixture should declare push audit expectations"),
+        );
+    }
+
+    #[test]
+    fn push_blocks_fixture_repo_when_required_live_github_governance_is_unavailable() {
+        let _guard = process_lock();
+        let fixture = materialize_repo_fixture("push-live-governance-unavailable-require");
+        let repo_root = fixture.repo_root.clone();
+
+        let previous_dir = env::current_dir().expect("current dir should resolve");
+        let previous_dry_run = env::var("WOLFENCE_DRY_RUN").ok();
+        env::set_current_dir(&repo_root).expect("should enter fixture repo");
+        env::set_var("WOLFENCE_DRY_RUN", "1");
+        let live_state = activate_live_github_governance_fixture(
+            &repo_root,
+            fixture.live_github_governance.as_ref(),
+        );
+
+        let result = run(false).expect("push command should run");
+        let findings = load_push_report_findings();
+
+        restore_process_state(&previous_dir, previous_dry_run, None, None);
+        restore_live_github_governance_fixture(live_state);
+        assert_fixture_expectation(
+            &fixture.name,
+            "push",
+            result,
+            &findings,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .expect("fixture should declare push expectations"),
+        );
+        assert_fixture_audit_expectation(
+            &fixture.name,
+            "push",
+            &repo_root,
+            fixture
+                .expectations
+                .push
+                .as_ref()
+                .and_then(|expectation| expectation.audit.as_ref())
+                .expect("fixture should declare push audit expectations"),
+        );
+    }
+
+    fn restore_process_state(
+        previous_dir: &Path,
+        previous_dry_run: Option<String>,
+        previous_governance: Option<String>,
+        previous_path: Option<String>,
+    ) {
         env::set_current_dir(previous_dir).expect("should restore current dir");
         if let Some(value) = previous_dry_run {
             env::set_var("WOLFENCE_DRY_RUN", value);
         } else {
             env::remove_var("WOLFENCE_DRY_RUN");
+        }
+        if let Some(value) = previous_governance {
+            env::set_var("WOLFENCE_GITHUB_GOVERNANCE", value);
+        }
+        if let Some(value) = previous_path {
+            env::set_var("PATH", value);
         }
     }
 
@@ -599,6 +1767,66 @@ mod tests {
         let config_dir = repo_root.join(".wolfence");
         fs::create_dir_all(&config_dir).expect("should create config dir");
         fs::write(config_dir.join("config.toml"), contents).expect("should write repo config");
+    }
+
+    fn configure_live_governance_repo(repo_root: &Path) {
+        fs::create_dir_all(repo_root.join(".github")).expect("should create .github dir");
+        fs::write(
+            repo_root.join(".github/settings.yml"),
+            "branches:\n  - name: main\n    protection:\n      enforce_admins: true\n      required_pull_request_reviews:\n        required_approving_review_count: 2\n        dismiss_stale_reviews: true\n        require_code_owner_reviews: true\n      allow_force_pushes: false\n      allow_deletions: false\n",
+        )
+        .expect("should write settings");
+        fs::write(
+            repo_root.join("README.md"),
+            "# Demo\n\nRepository with governance-as-code.\n",
+        )
+        .expect("should write readme");
+        run_git(
+            repo_root,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/openai/wolfence.git",
+            ],
+        );
+        commit_all(repo_root, "add governance intent");
+    }
+
+    fn install_governance_override_receipt(repo_root: &Path) {
+        let fake_bin = install_fake_gh(repo_root, false);
+        let previous_path = env::var("PATH").ok();
+        set_test_path(&fake_bin, previous_path.as_deref());
+        let finding = github_governance::push_blocking_finding(repo_root)
+            .expect("governance finding should resolve")
+            .expect("drift should exist");
+        if let Some(value) = previous_path {
+            env::set_var("PATH", value);
+        } else {
+            env::remove_var("PATH");
+        }
+
+        let receipts_dir = repo_root.join(RECEIPTS_DIR_RELATIVE_PATH);
+        fs::create_dir_all(&receipts_dir).expect("should create receipts dir");
+
+        let mut draft = ReceiptDraft {
+            receipt_id: String::new(),
+            action: ProtectedAction::Push,
+            category: FindingCategory::Policy,
+            fingerprint: finding.fingerprint,
+            owner: "security-team".to_string(),
+            reviewer: None,
+            reviewed_on: None,
+            reason: "temporary review of live GitHub governance drift".to_string(),
+            created_on: "2026-04-10".to_string(),
+            expires_on: "2099-12-31".to_string(),
+            category_bound: true,
+        };
+        draft.receipt_id = generate_receipt_id(&draft).expect("receipt id should generate");
+        let checksum = draft_checksum(&draft).expect("checksum should generate");
+        let contents = render_receipt_file(&draft, &checksum, None, None, None);
+        fs::write(receipts_dir.join("governance-drift.toml"), contents)
+            .expect("receipt should write");
     }
 
     fn commit_all(repo_root: &Path, message: &str) {
@@ -621,6 +1849,37 @@ mod tests {
         );
     }
 
+    fn install_fake_gh(repo_root: &Path, unavailable: bool) -> PathBuf {
+        let bin_dir = repo_root.join("test-bin");
+        fs::create_dir_all(&bin_dir).expect("should create fake bin dir");
+        let script = if unavailable {
+            "#!/bin/sh\necho 'gh auth expired' >&2\nexit 1\n".to_string()
+        } else {
+            "#!/bin/sh\nfor last; do :; done\ncase \"$last\" in\n  repos/openai/wolfence)\n    printf '{\"default_branch\":\"main\"}'\n    ;;\n  repos/openai/wolfence/branches/main/protection)\n    printf '{\"allow_force_pushes\":{\"enabled\":true},\"allow_deletions\":{\"enabled\":true},\"enforce_admins\":{\"enabled\":false},\"required_pull_request_reviews\":{\"dismiss_stale_reviews\":false,\"require_code_owner_reviews\":false,\"required_approving_review_count\":1}}'\n    ;;\n  'repos/openai/wolfence/rulesets?includes_parents=true&per_page=100')\n    printf '[]'\n    ;;\n  *)\n    echo \"unexpected gh api path: $last\" >&2\n    exit 1\n    ;;\n esac\n"
+                .to_string()
+        };
+        let gh_path = bin_dir.join("gh");
+        fs::write(&gh_path, script).expect("should write fake gh");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = fs::metadata(&gh_path)
+                .expect("metadata should load")
+                .permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&gh_path, permissions).expect("permissions should set");
+        }
+        bin_dir
+    }
+
+    fn set_test_path(fake_bin: &Path, previous_path: Option<&str>) {
+        let updated = match previous_path {
+            Some(value) if !value.is_empty() => format!("{}:{value}", fake_bin.display()),
+            _ => fake_bin.display().to_string(),
+        };
+        env::set_var("PATH", updated);
+    }
+
     fn make_temp_repo(name: &str) -> PathBuf {
         let unique = format!(
             "wolfence-push-{name}-{}-{}",
@@ -631,5 +1890,12 @@ mod tests {
                 .as_nanos()
         );
         env::temp_dir().join(unique)
+    }
+
+    fn load_push_report_findings() -> Vec<crate::core::findings::Finding> {
+        match protected::evaluate_push_action().expect("push evaluation should load") {
+            PushEvaluation::Ready { report, .. } => report.findings,
+            other => panic!("expected ready push evaluation, got {other:?}"),
+        }
     }
 }

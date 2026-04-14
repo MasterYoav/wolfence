@@ -1,0 +1,35 @@
+{
+  "prepare": "commit",
+  "upstream_fixture": "__upstream__",
+  "expectations": {
+    "push": {
+      "verdict": "allow",
+      "finding_ids": [
+        "secret.file.env"
+      ],
+      "json": {
+        "status": "ready",
+        "result": "completed",
+        "has_report": true,
+        "has_decision": true,
+        "has_finding_history": true,
+        "has_finding_baseline": true,
+        "receipt_issue_count": 0,
+        "receipt_overrides_applied": 1
+      },
+      "audit": {
+        "entries": 1,
+        "healthy": true,
+        "outcomes": [
+          "allowed-dry-run"
+        ],
+        "overrides_applied": [
+          1
+        ],
+        "receipt_issues": [
+          0
+        ]
+      }
+    }
+  }
+}

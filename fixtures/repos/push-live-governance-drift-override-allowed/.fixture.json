@@ -1,0 +1,47 @@
+{
+  "prepare": "commit",
+  "upstream_fixture": "__upstream__",
+  "live_github_governance": {
+    "repository": "openai/wolfence",
+    "mode": "auto",
+    "scenario": "drift"
+  },
+  "live_github_governance_receipt": {
+    "scenario": "drift",
+    "reason": "temporary review of live GitHub governance drift"
+  },
+  "expectations": {
+    "push": {
+      "verdict": "allow",
+      "finding_ids": [
+        "policy.github.live-governance.drift"
+      ],
+      "not_finding_ids": [
+        "policy.github.live-governance.unavailable"
+      ],
+      "json": {
+        "status": "ready",
+        "result": "completed",
+        "has_report": true,
+        "has_decision": true,
+        "has_finding_history": true,
+        "has_finding_baseline": true,
+        "receipt_issue_count": 0,
+        "receipt_overrides_applied": 1
+      },
+      "audit": {
+        "entries": 1,
+        "healthy": true,
+        "outcomes": [
+          "allowed-dry-run"
+        ],
+        "overrides_applied": [
+          1
+        ],
+        "receipt_issues": [
+          0
+        ]
+      }
+    }
+  }
+}

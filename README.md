@@ -4,6 +4,13 @@
 Wolfence is a **security-first Git interface** that prevents unsafe code
 from ever leaving a developer's machine.
 
+The repository now contains two product surfaces:
+
+- the authoritative `wolf` Rust CLI that enforces security decisions and wraps
+  protected Git operations
+- a native SwiftUI macOS app at the repo root that monitors multiple
+  repositories, renders Wolfence evidence, and refreshes structured repo state
+
 [![Rust](https://img.shields.io/badge/Rust-%23000000.svg?e&logo=rust&logoColor=white)](#)
 [![Swift](https://img.shields.io/badge/Swift-F54A2A?logo=swift&logoColor=white)](#)
 
@@ -57,11 +64,11 @@ API keys, tokens, private keys, .env leaks
 
 ### Vulnerabilities
 
-SQLi, XSS, SSRF, injections, unsafe eval
+command injection, SSRF, path traversal, unsafe deserialization, XSS, unsafe eval
 
 ### Dependencies
 
-CVEs, outdated libs, malicious packages
+CVEs, lockfile drift, risky registries, direct package sources
 
 ### Config
 
@@ -80,19 +87,34 @@ Custom org rules
 -   Clear explanations
 -   Git integration
 -   Extensible engine
+-   High-signal appsec checks for command execution, SSRF, path traversal, unsafe deserialization, and remote script execution
+-   Artifact inspection for packaged archives, compiled binaries, and suspicious minified bundles
+-   Dependency provenance checks across Cargo, npm, pnpm, Yarn, Go modules, Bundler, Poetry, uv, Pipenv, and pinned Python requirements, including tracked registry posture, repo-local internal package ownership hints, owner-host mismatch detection in supported changed lockfiles (`package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`, `yarn.lock`, `Gemfile.lock`, `gems.locked`, `poetry.lock`, `uv.lock`, `Pipfile.lock`), and direct-source checks in manifests plus Python lockfiles that catch declared internal packages bypassing normal registry or index flow through Git, archive, file, path, or editable-style sources
+-   Self-protection, governance, and release-integrity checks for `.wolfence` authority changes, hook drift, `CODEOWNERS` coverage, repo-admin settings, rulesets, and risky GitHub Actions publish paths
+-   IaC posture checks for Terraform/OpenTofu public storage, wildcard IAM, public admin ingress, and Kubernetes RBAC or pod-hardening risks
+-   Optional live GitHub governance verification in `doctor` and protected push using `gh api` and repo-as-code intent
+-   Repo-local finding history so CLI, JSON, and the macOS app can distinguish new risk from recurring findings by fingerprint
+-   Repo-local accepted finding baselines so teams can mark a starting state without weakening push policy
+-   Native macOS monitoring workspace for local repositories
 
 ------------------------------------------------------------------------
 
 ## Architecture
 
-CLI → Orchestrator → Scanners → Policy → Decision → Git
+Protected path:
+
+`wolf CLI → Orchestrator → Scanners → Policy → Decision → Git`
+
+Operator console:
+
+`macOS app → .wolfence files + wolf --json surfaces → native workspace UI`
 
 ------------------------------------------------------------------------
 
 ## Implementation Direction
 
-Wolfence is now being implemented in **Rust** as a **local-first modular
-monolith**.
+Wolfence is now implemented as a **local-first Rust security engine** with a
+**native SwiftUI macOS console**.
 
 Why:
 
@@ -100,6 +122,12 @@ Why:
 - deterministic local enforcement
 - strong performance for scans
 - good fit for a security-sensitive developer tool
+- a native local console can observe the gate without moving trust decisions
+  out of the Rust core
+
+The Rust binary remains authoritative for every security judgment. The macOS
+app is an operator console that reads repo-local evidence and machine-readable
+Wolfence output instead of reimplementing policy.
 
 Core docs:
 
@@ -107,6 +135,9 @@ Core docs:
 - `docs/architecture/decision-records/0001-modular-monolith.md`
 - `docs/security/threat-model.md`
 - `docs/security/detection-model.md`
+- `docs/security/scanner-inventory.md`
+- `docs/security/scanner-inventory.json`
+- `docs/security/safety-check-roadmap.md`
 - `docs/security/policy-model.md`
 - `docs/security/override-receipts.md`
 - `docs/security/receipt-approval-policy.md`
@@ -117,6 +148,7 @@ Core docs:
 - `docs/development/doctor.md`
 - `docs/development/json-output.md`
 - `docs/development/prototype-demo.md`
+- `docs/ui/macos-console.md`
 - `docs/ui/swiftui-xcode-handoff.md`
 - `docs/repo-map.md`
 
@@ -131,6 +163,9 @@ wolf scan\
 wolf scan --json\
 wolf scan push\
 wolf scan push --json\
+wolf baseline capture [push|staged]\
+wolf baseline show\
+wolf baseline clear\
 wolf doctor\
 wolf doctor --json\
 wolf config\
@@ -172,6 +207,10 @@ surface is `wolf ...`.
 For UI work and automation, prefer the documented machine-readable surfaces in:
 
 `docs/development/json-output.md`
+
+For native app work, the root-level Xcode project is:
+
+`Wolfence.xcodeproj`
 
 ------------------------------------------------------------------------
 
@@ -232,8 +271,10 @@ Current `wolf push` behavior:
 
 Current detection strengths:
 
-- layered secret detection for sensitive file paths, private keys, known token families, and high-entropy secret assignments
+- layered secret detection for sensitive file paths, private keys, known token families, high-entropy secret assignments, escaped key blobs, and embedded connection-string secrets
 - dependency intelligence for direct Git/URL sources, insecure transport, wildcard versions, lockfile integrity posture, and manifest/lockfile drift
+- GitHub Actions hardening checks for dangerous triggers, mutable third-party and reusable workflows, self-hosted PR runners, artifact execution chains, dispatch/release ref misuse, unsafe command settings, attestation-permission gaps, and mutable tag minting
+- Docker build hardening checks for mutable or non-digest-pinned base images
 - optional OSV-backed live advisory checks for exact dependency versions during protected pushes
 
 Current policy strengths:
@@ -241,6 +282,7 @@ Current policy strengths:
 - deterministic sorting and deduplication of findings before policy evaluation
 - severity, confidence, and category-aware decisions instead of severity alone
 - stronger standard-mode blocking for medium high-confidence non-vulnerability findings
+- explicit standard-mode blocking for declared internal package ownership drift and direct-source bypasses, even when they would otherwise look like lower-severity dependency posture issues
 - strict-mode blocking for low high-confidence non-vulnerability findings that still weaken provenance or policy posture
 - rich blocked-push explanations with location, remediation, and policy rationale
 - reviewable override receipts with owner, reason, expiry, and integrity checks
@@ -259,6 +301,10 @@ Current policy strengths:
 
 ## Roadmap
 
+-   Document the product plan for the macOS console so the desktop app grows
+    without stealing authority from the Rust gate\
+-   Expand Wolfence into a comprehensive pre-push safety-check engine across
+    secrets, appsec, dependency risk, CI, IaC, policy, and provenance\
 -   Cloud dashboard\
 -   AI analysis\
 -   VSCode extension\

@@ -1,0 +1,3 @@
+[categories.secret]
+require_reviewer_metadata = true
+allowed_reviewers = ["security-team"]

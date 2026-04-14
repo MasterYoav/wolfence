@@ -45,9 +45,65 @@ The JSON layer uses lowercase string enums for core security concepts:
 - severity: `info`, `low`, `medium`, `high`, `critical`
 - confidence: `low`, `medium`, `high`
 - finding category: `secret`, `vulnerability`, `dependency`, `configuration`, `policy`
+- remediation kind: `rotate-secret`, `restrict-scope`, `pin-reference`, `add-integrity`, `patch-dependency`, `review-code`, `remove-artifact`, `restore-wolfence-guard`, `tighten-governance`, `investigate`
+- remediation urgency: `immediate`, `before-push`
+- remediation owner surface: `secrets`, `workflow`, `dependency`, `registry`, `code`, `artifact`, `governance`, `wolfence`, `container`, `infrastructure`
 - verdict: `allow`, `warn`, `block`
 - doctor status: `pass`, `warn`, `fail`, `info`
 - protected action: `scan`, `push`
+
+### Finding Shape
+
+Every finding object returned under `report.findings`, `decision.blocking_findings[].finding`,
+`decision.warning_findings[].finding`, and `decision.overridden_findings[].finding`
+contains both a legacy free-text remediation string and normalized remediation
+metadata:
+
+```json
+{
+  "scanner": "secret-scanner",
+  "severity": "critical",
+  "confidence": "high",
+  "category": "secret",
+  "file": ".env",
+  "line": 3,
+  "title": "Inline credential detected",
+  "detail": "A high-signal credential pattern was found in repository content.",
+  "remediation": "Rotate the credential and remove it from repository scope.",
+  "remediation_advice": {
+    "kind": "rotate-secret",
+    "urgency": "immediate",
+    "owner_surface": "secrets",
+    "primary_action": "Rotate the exposed credential and remove it from repository scope.",
+    "primary_command": null,
+    "docs_ref": "docs/security/detection-model.md"
+  },
+  "fingerprint": "...",
+  "history": {
+    "status": "new",
+    "first_seen_unix": 1775779200,
+    "last_seen_unix": 1775779200,
+    "times_seen": 1
+  },
+  "baseline": {
+    "accepted": false,
+    "captured_on_unix": 1775700000
+  }
+}
+```
+
+`remediation` remains the backward-compatible human string. New UI and
+automation consumers should prefer `remediation_advice` when grouping or
+prioritizing fixes.
+
+The `history` object is repo-local state derived from prior Wolfence runs. It
+is intended to help operators prioritize newly introduced risk before recurring
+known findings.
+
+The `baseline` object is repo-local operator metadata derived from
+`.wolfence/history/baseline.json`. It marks whether the finding fingerprint is
+part of an accepted starting set. It does not suppress policy or override a
+blocking verdict.
 
 ### Error Envelope
 
@@ -78,6 +134,10 @@ payload, Wolfence returns this error envelope:
 
 Returns the current repository health posture and all individual checks needed
 to decide whether local Wolfence enforcement is trustworthy.
+
+The exact check list may grow as Wolfence adds more trust-surface verification,
+including optional live GitHub governance checks. Consumers should treat
+`checks[].name` as descriptive output rather than hard-coding a fixed list.
 
 ### Shape
 
@@ -133,13 +193,13 @@ Preview the staged working set under the current policy without invoking
   "branch": null,
   "upstream": null,
   "commits_ahead": null,
-  "scanners_run": 5,
+  "scanners_run": 6,
   "report": {
     "findings": [],
     "discovered_files": 0,
     "scanned_files": 0,
     "ignored_files": 0,
-    "scanners_run": 5
+    "scanners_run": 6
   },
   "decision": {
     "verdict": "allow",
@@ -244,7 +304,17 @@ final Git transport outcome.
     "discovered_files": 35,
     "scanned_files": 25,
     "ignored_files": 10,
-    "scanners_run": 5
+    "scanners_run": 6,
+    "finding_history": {
+      "new_findings": 1,
+      "recurring_findings": 3,
+      "issue": null
+    },
+    "finding_baseline": {
+      "accepted_findings": 3,
+      "unaccepted_findings": 1,
+      "issue": null
+    }
   },
   "decision": {
     "verdict": "allow",
@@ -265,6 +335,16 @@ final Git transport outcome.
   "git_error": null
 }
 ```
+
+When live GitHub governance drift exists, `report.findings` and `decision`
+include a `policy.github.live-governance.drift` finding with a stable
+fingerprint. When `WOLFENCE_GITHUB_GOVERNANCE=require` and verification cannot
+run, the payload instead includes `policy.github.live-governance.unavailable`.
+The report-level `finding_history` summary mirrors the per-finding `history`
+objects so UIs can highlight newly introduced risk quickly.
+The report-level `finding_baseline` summary mirrors the per-finding `baseline`
+objects so UIs can prioritize newly introduced findings over accepted starting
+state without weakening enforcement.
 
 ### Status Values
 

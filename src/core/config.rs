@@ -42,6 +42,13 @@ pub struct ResolvedConfig {
     pub repo_config_path: PathBuf,
     pub repo_config_exists: bool,
     pub scan_ignore_paths: Vec<String>,
+    pub node_internal_packages: Vec<String>,
+    pub node_internal_package_prefixes: Vec<String>,
+    pub node_registry_ownership: Vec<String>,
+    pub ruby_source_ownership: Vec<String>,
+    pub python_internal_packages: Vec<String>,
+    pub python_internal_package_prefixes: Vec<String>,
+    pub python_index_ownership: Vec<String>,
 }
 
 impl ResolvedConfig {
@@ -53,6 +60,13 @@ impl ResolvedConfig {
         let mut mode = EnforcementMode::Standard;
         let mut mode_source = ConfigSource::Default;
         let mut scan_ignore_paths = Vec::new();
+        let mut node_internal_packages = Vec::new();
+        let mut node_internal_package_prefixes = Vec::new();
+        let mut node_registry_ownership = Vec::new();
+        let mut ruby_source_ownership = Vec::new();
+        let mut python_internal_packages = Vec::new();
+        let mut python_internal_package_prefixes = Vec::new();
+        let mut python_index_ownership = Vec::new();
 
         if repo_config_exists {
             let contents = fs::read_to_string(&repo_config_path)?;
@@ -61,6 +75,20 @@ impl ResolvedConfig {
                 mode_source = ConfigSource::RepoFile;
             }
             scan_ignore_paths = parse_scan_ignore_paths(&contents)?;
+            node_internal_packages =
+                parse_dependency_packages(&contents, "node_internal_packages")?;
+            node_internal_package_prefixes =
+                parse_dependency_packages(&contents, "node_internal_package_prefixes")?;
+            node_registry_ownership =
+                parse_registry_ownership_rules(&contents, "node_registry_ownership")?;
+            ruby_source_ownership =
+                parse_registry_ownership_rules(&contents, "ruby_source_ownership")?;
+            python_internal_packages =
+                parse_dependency_packages(&contents, "python_internal_packages")?;
+            python_internal_package_prefixes =
+                parse_dependency_packages(&contents, "python_internal_package_prefixes")?;
+            python_index_ownership =
+                parse_registry_ownership_rules(&contents, "python_index_ownership")?;
         }
 
         if let Some(env_mode) = std::env::var("WOLFENCE_MODE").ok() {
@@ -78,6 +106,13 @@ impl ResolvedConfig {
             repo_config_path,
             repo_config_exists,
             scan_ignore_paths,
+            node_internal_packages,
+            node_internal_package_prefixes,
+            node_registry_ownership,
+            ruby_source_ownership,
+            python_internal_packages,
+            python_internal_package_prefixes,
+            python_index_ownership,
         })
     }
 
@@ -115,6 +150,36 @@ mode = "standard"
 # - "docs/examples.md" for one exact path
 # - "fixtures/**" for a recursive prefix
 ignore_paths = []
+
+[dependency]
+
+# Internal package names that are expected to resolve through private Node
+# registry configuration in this repository.
+node_internal_packages = []
+
+# Package-name prefixes that are expected to belong to internal Node packages
+# resolved through private registry configuration in this repository.
+node_internal_package_prefixes = []
+
+# Registry-host ownership rules for internal Node packages.
+# Format: "host=package" for one exact package or "host=prefix*" for a prefix.
+node_registry_ownership = []
+
+# Source-host ownership rules for internal Ruby gems.
+# Format: "host=package" for one exact gem or "host=prefix*" for a prefix.
+ruby_source_ownership = []
+
+# Internal package names that are expected to resolve through private Python
+# package indexes in this repository.
+python_internal_packages = []
+
+# Package-name prefixes that are expected to belong to internal Python
+# packages resolved through custom package indexes in this repository.
+python_internal_package_prefixes = []
+
+# Index-host ownership rules for internal Python packages.
+# Format: "host=package" for one exact package or "host=prefix*" for a prefix.
+python_index_ownership = []
 "#
 }
 
@@ -149,7 +214,28 @@ fn parse_mode_from_config(contents: &str) -> AppResult<Option<EnforcementMode>> 
 }
 
 fn parse_scan_ignore_paths(contents: &str) -> AppResult<Vec<String>> {
-    let mut ignore_paths = Vec::new();
+    parse_string_array_key(contents, "ignore_paths", |pattern| {
+        validate_scan_ignore_pattern(pattern)
+    })
+}
+
+fn parse_dependency_packages(contents: &str, key_name: &str) -> AppResult<Vec<String>> {
+    parse_string_array_key(contents, key_name, |package| {
+        validate_dependency_package_name(key_name, package)
+    })
+}
+
+fn parse_registry_ownership_rules(contents: &str, key_name: &str) -> AppResult<Vec<String>> {
+    parse_string_array_key(contents, key_name, |rule| {
+        validate_registry_ownership_rule(key_name, rule)
+    })
+}
+
+fn parse_string_array_key<F>(contents: &str, key_name: &str, validator: F) -> AppResult<Vec<String>>
+where
+    F: Fn(&str) -> AppResult<String>,
+{
+    let mut values = Vec::new();
 
     for raw_line in contents.lines() {
         let line = strip_comment(raw_line).trim();
@@ -162,15 +248,15 @@ fn parse_scan_ignore_paths(contents: &str) -> AppResult<Vec<String>> {
             continue;
         };
 
-        if key.trim() != "ignore_paths" {
+        if key.trim() != key_name {
             continue;
         }
 
         let trimmed = value.trim();
         if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
             return Err(AppError::Config(format!(
-                "invalid `ignore_paths` value in {}: expected an array of quoted strings",
-                REPO_CONFIG_RELATIVE_PATH
+                "invalid `{key_name}` value in {}: expected an array of quoted strings",
+                REPO_CONFIG_RELATIVE_PATH,
             )));
         }
 
@@ -180,17 +266,79 @@ fn parse_scan_ignore_paths(contents: &str) -> AppResult<Vec<String>> {
         }
 
         for item in inner.split(',') {
-            let pattern = item.trim().trim_matches('"').trim();
-            if pattern.is_empty() {
+            let value = item.trim().trim_matches('"').trim();
+            if value.is_empty() {
                 continue;
             }
-            ignore_paths.push(validate_scan_ignore_pattern(pattern)?);
+            values.push(validator(value)?);
         }
 
-        return Ok(ignore_paths);
+        return Ok(values);
     }
 
-    Ok(ignore_paths)
+    Ok(values)
+}
+
+fn validate_dependency_package_name(key_name: &str, package: &str) -> AppResult<String> {
+    let normalized = package.trim();
+    if normalized.is_empty() {
+        return Err(AppError::Config(format!(
+            "invalid `{key_name}` value in {}: package names cannot be empty",
+            REPO_CONFIG_RELATIVE_PATH
+        )));
+    }
+
+    if normalized.contains(char::is_whitespace) || normalized.contains("://") {
+        return Err(AppError::Config(format!(
+            "invalid `{key_name}` value in {}: `{normalized}` must be a package name, not a URL or spaced token",
+            REPO_CONFIG_RELATIVE_PATH
+        )));
+    }
+
+    Ok(normalized.to_string())
+}
+
+fn validate_registry_ownership_rule(key_name: &str, rule: &str) -> AppResult<String> {
+    let Some((host, pattern)) = rule.split_once('=') else {
+        return Err(AppError::Config(format!(
+            "invalid `{key_name}` value in {}: expected `host=package` or `host=prefix*`",
+            REPO_CONFIG_RELATIVE_PATH
+        )));
+    };
+
+    let normalized_host = host.trim().to_ascii_lowercase();
+    if normalized_host.is_empty()
+        || normalized_host.contains(char::is_whitespace)
+        || normalized_host.contains("://")
+        || normalized_host.contains('/')
+    {
+        return Err(AppError::Config(format!(
+            "invalid `{key_name}` value in {}: `{}` must use a bare registry host, not a URL or path",
+            REPO_CONFIG_RELATIVE_PATH, host.trim()
+        )));
+    }
+
+    let normalized_pattern = pattern.trim();
+    if normalized_pattern.is_empty() {
+        return Err(AppError::Config(format!(
+            "invalid `{key_name}` value in {}: package pattern cannot be empty",
+            REPO_CONFIG_RELATIVE_PATH
+        )));
+    }
+
+    if normalized_pattern.contains('*') && !normalized_pattern.ends_with('*') {
+        return Err(AppError::Config(format!(
+            "invalid `{key_name}` value in {}: wildcard package patterns must use a trailing `*`",
+            REPO_CONFIG_RELATIVE_PATH
+        )));
+    }
+
+    let package = normalized_pattern
+        .strip_suffix('*')
+        .unwrap_or(normalized_pattern);
+    validate_dependency_package_name(key_name, package)?;
+
+    Ok(format!("{normalized_host}={normalized_pattern}"))
 }
 
 fn validate_scan_ignore_pattern(pattern: &str) -> AppResult<String> {
@@ -265,8 +413,9 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        parse_mode_from_config, parse_scan_ignore_paths, path_matches_ignore_pattern,
-        validate_scan_ignore_pattern, ResolvedConfig,
+        parse_dependency_packages, parse_mode_from_config, parse_registry_ownership_rules,
+        parse_scan_ignore_paths, path_matches_ignore_pattern, validate_scan_ignore_pattern,
+        ResolvedConfig,
     };
     use crate::core::policy::EnforcementMode;
 
@@ -308,6 +457,58 @@ ignore_paths = ["docs/", "fixtures/**", "README.md"]
     }
 
     #[test]
+    fn parses_dependency_internal_package_lists() {
+        let config = r#"
+[dependency]
+node_internal_packages = ["internal-sdk", "platform-core"]
+node_internal_package_prefixes = ["platform-", "corp-"]
+node_registry_ownership = ["packages.example.com=internal-sdk", "packages.example.com=platform-*"]
+ruby_source_ownership = ["gems.example.com=corp-*", "github.com=internal-sdk"]
+python_internal_packages = ["internal-sdk", "corp-utils"]
+python_internal_package_prefixes = ["corp-", "internal-"]
+python_index_ownership = ["packages.example.com=corp-*", "packages.example.com=internal-sdk"]
+"#;
+
+        let node = parse_dependency_packages(config, "node_internal_packages")
+            .expect("node package list should parse");
+        let node_prefixes = parse_dependency_packages(config, "node_internal_package_prefixes")
+            .expect("node prefix list should parse");
+        let node_ownership = parse_registry_ownership_rules(config, "node_registry_ownership")
+            .expect("node ownership rules should parse");
+        let ruby_ownership = parse_registry_ownership_rules(config, "ruby_source_ownership")
+            .expect("ruby ownership rules should parse");
+        let python = parse_dependency_packages(config, "python_internal_packages")
+            .expect("python package list should parse");
+        let python_prefixes = parse_dependency_packages(config, "python_internal_package_prefixes")
+            .expect("python prefix list should parse");
+        let python_ownership = parse_registry_ownership_rules(config, "python_index_ownership")
+            .expect("python ownership rules should parse");
+
+        assert_eq!(node, vec!["internal-sdk", "platform-core"]);
+        assert_eq!(node_prefixes, vec!["platform-", "corp-"]);
+        assert_eq!(
+            node_ownership,
+            vec![
+                "packages.example.com=internal-sdk",
+                "packages.example.com=platform-*"
+            ]
+        );
+        assert_eq!(
+            ruby_ownership,
+            vec!["gems.example.com=corp-*", "github.com=internal-sdk"]
+        );
+        assert_eq!(python, vec!["internal-sdk", "corp-utils"]);
+        assert_eq!(python_prefixes, vec!["corp-", "internal-"]);
+        assert_eq!(
+            python_ownership,
+            vec![
+                "packages.example.com=corp-*",
+                "packages.example.com=internal-sdk"
+            ]
+        );
+    }
+
+    #[test]
     fn matches_ignore_patterns_for_exact_paths_and_prefixes() {
         assert!(path_matches_ignore_pattern("docs/guide.md", "docs/"));
         assert!(path_matches_ignore_pattern(
@@ -326,6 +527,13 @@ ignore_paths = ["docs/", "fixtures/**", "README.md"]
             repo_config_path: Path::new(".wolfence/config.toml").to_path_buf(),
             repo_config_exists: true,
             scan_ignore_paths: vec!["docs/".to_string(), "fixtures/**".to_string()],
+            node_internal_packages: Vec::new(),
+            node_internal_package_prefixes: Vec::new(),
+            node_registry_ownership: Vec::new(),
+            ruby_source_ownership: Vec::new(),
+            python_internal_packages: Vec::new(),
+            python_internal_package_prefixes: Vec::new(),
+            python_index_ownership: Vec::new(),
         };
 
         assert!(config.should_ignore_path(Path::new("docs/guide.md")));
@@ -343,6 +551,38 @@ ignore_paths = ["docs/", "fixtures/**", "README.md"]
                 message.contains("invalid `ignore_paths` value"),
                 "unexpected error for {pattern}: {message}"
             );
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_dependency_package_entries() {
+        for package in [
+            "",
+            "internal sdk",
+            "https://packages.example.com/internal-sdk",
+        ] {
+            let error = super::validate_dependency_package_name("node_internal_packages", package)
+                .expect_err("invalid package should fail");
+            assert!(error
+                .to_string()
+                .contains("invalid `node_internal_packages` value"));
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_registry_ownership_entries() {
+        for rule in [
+            "",
+            "packages.example.com",
+            "https://packages.example.com=internal-sdk",
+            "packages.example.com=internal*sdk",
+            "packages.example.com=https://packages.example.com/internal-sdk",
+        ] {
+            let error = super::validate_registry_ownership_rule("node_registry_ownership", rule)
+                .expect_err("invalid ownership rule should fail");
+            assert!(error
+                .to_string()
+                .contains("invalid `node_registry_ownership` value"));
         }
     }
 }

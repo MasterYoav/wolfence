@@ -75,6 +75,15 @@ Wolfence can generate the same canonical unsigned draft for you:
 cargo run -- receipt new .wolfence/receipts/allow-secret.toml push dependency dependency-lock-missing-integrity:package-lock.json:41 yoav 2026-04-16 "Temporary exception while regenerating the lockfile on the release branch."
 ```
 
+`receipt new` now accepts three expiry forms:
+
+- exact ISO date: `2026-04-16`
+- policy-aware automatic expiry: `auto`
+- relative shorthand from `created_on`: `+7d`
+
+When you use `auto`, Wolfence chooses a short category-aware lifetime and also
+respects `max_lifetime_days` when the repo approval policy sets one.
+
 You can inspect the repository-wide receipt surface at any time:
 
 ```bash
@@ -145,6 +154,11 @@ practice, even if the parser accepts them.
 Exact ISO dates in `YYYY-MM-DD` format.
 
 Expired receipts are ignored automatically.
+
+`wolf receipt new` can derive `expires_on` for you with:
+
+- `auto` for Wolfence's recommended short-lived expiry
+- `+<days>d` for an explicit relative lifetime from the creation date
 
 ### `reviewer` and `reviewed_on`
 

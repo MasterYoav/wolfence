@@ -1,0 +1,13 @@
+name: release
+target: branch
+enforcement: evaluate
+
+bypass_actors:
+  - actor_id: 1
+    actor_type: RepositoryRole
+    bypass_mode: always
+
+rules:
+  - type: non_fast_forward
+    parameters:
+      enabled: false

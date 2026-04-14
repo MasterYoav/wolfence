@@ -11,7 +11,9 @@ use crate::app::AppResult;
 use crate::core::audit::{self, AUDIT_LOG_RELATIVE_PATH};
 use crate::core::config::ResolvedConfig;
 use crate::core::context::ProtectedAction;
+use crate::core::finding_baseline::{self, FINDING_BASELINE_FILE_RELATIVE_PATH};
 use crate::core::git;
+use crate::core::github_governance::GithubGovernanceMode;
 use crate::core::osv::OsvMode;
 use crate::core::receipt_policy::RECEIPT_POLICY_FILE_RELATIVE_PATH;
 use crate::core::receipts::ReceiptIndex;
@@ -21,18 +23,22 @@ pub fn run() -> AppResult<ExitCode> {
     let config = ResolvedConfig::load_for_repo(&repo_root)?;
     let receipts = ReceiptIndex::load_for_repo(&repo_root)?;
     let osv_mode = OsvMode::resolve()?;
+    let github_governance_mode = GithubGovernanceMode::resolve()?;
     let archived_trust_keys = archived_trust_count(&repo_root)?;
+    let baseline = finding_baseline::load_baseline(&repo_root)?;
 
     println!("Wolfence configuration surfaces");
     println!("  global: ~/.wolfence/config.toml");
     println!("  repo:   .wolfence/config.toml");
     println!("  policy: {RECEIPT_POLICY_FILE_RELATIVE_PATH}");
     println!("  receipts: .wolfence/receipts/*.toml");
+    println!("  finding baseline: {FINDING_BASELINE_FILE_RELATIVE_PATH}");
     println!(
         "  trust: {TRUST_DIR_RELATIVE_PATH}/*.pem + *.toml (archive in .wolfence/trust/archive/)"
     );
     println!("  audit: {AUDIT_LOG_RELATIVE_PATH}");
     println!("  live advisories: OSV via WOLFENCE_OSV");
+    println!("  live GitHub governance verification: WOLFENCE_GITHUB_GOVERNANCE");
     println!("  modes:  advisory | standard | strict");
     println!();
     println!("Effective configuration");
@@ -123,7 +129,16 @@ pub fn run() -> AppResult<ExitCode> {
     let audit = audit::verify_audit_log(&repo_root)?;
     println!("  audit entries: {}", audit.entries);
     println!("  audit healthy: {}", audit.healthy);
+    println!("  finding baseline captured: {}", baseline.is_some());
+    if let Some(snapshot) = baseline {
+        println!("  finding baseline scope: {}", snapshot.scope);
+        println!(
+            "  finding baseline fingerprints: {}",
+            snapshot.fingerprints.len()
+        );
+    }
     println!("  live OSV advisory mode: {}", osv_mode);
+    println!("  live GitHub governance mode: {}", github_governance_mode);
     println!(
         "  scan ignore paths: {}",
         if config.scan_ignore_paths.is_empty() {
@@ -132,9 +147,68 @@ pub fn run() -> AppResult<ExitCode> {
             config.scan_ignore_paths.join(", ")
         }
     );
+    println!(
+        "  dependency node internal packages: {}",
+        if config.node_internal_packages.is_empty() {
+            "none".to_string()
+        } else {
+            config.node_internal_packages.join(", ")
+        }
+    );
+    println!(
+        "  dependency node internal package prefixes: {}",
+        if config.node_internal_package_prefixes.is_empty() {
+            "none".to_string()
+        } else {
+            config.node_internal_package_prefixes.join(", ")
+        }
+    );
+    println!(
+        "  dependency node registry ownership rules: {}",
+        if config.node_registry_ownership.is_empty() {
+            "none".to_string()
+        } else {
+            config.node_registry_ownership.join(", ")
+        }
+    );
+    println!(
+        "  dependency ruby source ownership rules: {}",
+        if config.ruby_source_ownership.is_empty() {
+            "none".to_string()
+        } else {
+            config.ruby_source_ownership.join(", ")
+        }
+    );
+    println!(
+        "  dependency python internal packages: {}",
+        if config.python_internal_packages.is_empty() {
+            "none".to_string()
+        } else {
+            config.python_internal_packages.join(", ")
+        }
+    );
+    println!(
+        "  dependency python internal package prefixes: {}",
+        if config.python_internal_package_prefixes.is_empty() {
+            "none".to_string()
+        } else {
+            config.python_internal_package_prefixes.join(", ")
+        }
+    );
+    println!(
+        "  dependency python index ownership rules: {}",
+        if config.python_index_ownership.is_empty() {
+            "none".to_string()
+        } else {
+            config.python_index_ownership.join(", ")
+        }
+    );
     println!("  effective mode: {} ({})", config.mode, config.mode_source);
     println!("  precedence: WOLFENCE_MODE -> repo config -> built-in default");
     println!("  advisory source precedence: WOLFENCE_OSV -> built-in default (`auto`)");
+    println!(
+        "  live GitHub governance precedence: WOLFENCE_GITHUB_GOVERNANCE -> built-in default (`auto`)"
+    );
 
     Ok(ExitCode::SUCCESS)
 }

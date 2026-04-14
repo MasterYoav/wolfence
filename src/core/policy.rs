@@ -167,6 +167,12 @@ fn classify_finding(mode: EnforcementMode, finding: &Finding) -> FindingDisposit
 }
 
 fn classify_advisory(finding: &Finding) -> FindingDisposition {
+    if is_internal_dependency_provenance_violation(finding) {
+        return FindingDisposition::Warn(
+            "advisory mode still surfaces declared internal package provenance drift and direct-source bypasses for review.",
+        );
+    }
+
     if finding.severity >= Severity::Medium {
         return FindingDisposition::Warn(
             "advisory mode never blocks, but medium-and-above findings still require review.",
@@ -185,6 +191,12 @@ fn classify_advisory(finding: &Finding) -> FindingDisposition {
 fn classify_standard(finding: &Finding) -> FindingDisposition {
     if finding.severity >= Severity::High {
         return FindingDisposition::Block("standard mode blocks high and critical findings.");
+    }
+
+    if is_internal_dependency_provenance_violation(finding) {
+        return FindingDisposition::Block(
+            "standard mode blocks declared internal package ownership drift and direct-source bypasses because they break explicit private-package provenance policy.",
+        );
     }
 
     if finding.severity >= Severity::Medium && is_high_signal_non_heuristic(finding) {
@@ -209,6 +221,12 @@ fn classify_standard(finding: &Finding) -> FindingDisposition {
 }
 
 fn classify_strict(finding: &Finding) -> FindingDisposition {
+    if is_internal_dependency_provenance_violation(finding) {
+        return FindingDisposition::Block(
+            "strict mode treats declared internal package ownership drift and direct-source bypasses as hard provenance failures.",
+        );
+    }
+
     if finding.severity >= Severity::Medium {
         return FindingDisposition::Block(
             "strict mode blocks medium, high, and critical findings.",
@@ -238,6 +256,12 @@ fn is_high_signal_non_heuristic(finding: &Finding) -> bool {
     finding.confidence == Confidence::High && finding.category != FindingCategory::Vulnerability
 }
 
+fn is_internal_dependency_provenance_violation(finding: &Finding) -> bool {
+    finding.category == FindingCategory::Dependency
+        && (finding.id.ends_with(".ownership-host-mismatch")
+            || finding.id.ends_with(".direct-source-owner-bypass"))
+}
+
 #[cfg(test)]
 mod tests {
     use std::env;
@@ -247,6 +271,8 @@ mod tests {
 
     use super::{EnforcementMode, Verdict};
     use crate::core::context::ProtectedAction;
+    use crate::core::finding_baseline::FindingBaselineSummary;
+    use crate::core::finding_history::FindingHistorySummary;
     use crate::core::findings::{Confidence, Finding, FindingCategory, Severity};
     use crate::core::orchestrator::ScanReport;
     use crate::core::receipts::OverrideReceipt;
@@ -271,6 +297,8 @@ mod tests {
             scanned_files: 1,
             ignored_files: 0,
             scanners_run: 1,
+            finding_history: FindingHistorySummary::default(),
+            finding_baseline: FindingBaselineSummary::default(),
         };
 
         let decision = report.evaluate(
@@ -301,6 +329,8 @@ mod tests {
             scanned_files: 1,
             ignored_files: 0,
             scanners_run: 1,
+            finding_history: FindingHistorySummary::default(),
+            finding_baseline: FindingBaselineSummary::default(),
         };
 
         let decision = report.evaluate(
@@ -331,6 +361,8 @@ mod tests {
             scanned_files: 1,
             ignored_files: 0,
             scanners_run: 1,
+            finding_history: FindingHistorySummary::default(),
+            finding_baseline: FindingBaselineSummary::default(),
         };
 
         let decision = report.evaluate(
@@ -340,6 +372,72 @@ mod tests {
         );
         assert_eq!(decision.verdict, Verdict::Block);
         assert_eq!(decision.blocking_findings.len(), 1);
+    }
+
+    #[test]
+    fn standard_mode_blocks_low_severity_internal_dependency_provenance_violations() {
+        let report = ScanReport {
+            findings: vec![Finding::new(
+                "dependency.python.lockfile.direct-source-owner-bypass",
+                "dependency-scanner",
+                Severity::Low,
+                Confidence::High,
+                FindingCategory::Dependency,
+                Some(PathBuf::from("uv.lock")),
+                "Python lockfile bypasses declared internal package ownership through a direct source",
+                "The lockfile resolves an internal package through a direct source instead of the declared private index flow.",
+                "Return the package to the declared private index path before pushing.",
+                "dependency-python-lock-direct-owner-bypass:uv.lock:corp-utils:packages.example.com:git",
+            )],
+            discovered_files: 1,
+            scanned_files: 1,
+            ignored_files: 0,
+            scanners_run: 1,
+            finding_history: FindingHistorySummary::default(),
+            finding_baseline: FindingBaselineSummary::default(),
+        };
+
+        let decision = report.evaluate(
+            EnforcementMode::Standard,
+            &ReceiptIndex::default(),
+            ProtectedAction::Push,
+        );
+        assert_eq!(decision.verdict, Verdict::Block);
+        assert_eq!(decision.blocking_findings.len(), 1);
+        assert_eq!(decision.warning_findings.len(), 0);
+    }
+
+    #[test]
+    fn standard_mode_only_warns_on_low_severity_generic_dependency_posture_findings() {
+        let report = ScanReport {
+            findings: vec![Finding::new(
+                "dependency.cargo.path-source",
+                "dependency-scanner",
+                Severity::Low,
+                Confidence::High,
+                FindingCategory::Dependency,
+                Some(PathBuf::from("Cargo.toml")),
+                "Cargo dependency uses a local path source",
+                "A Cargo dependency is sourced from a local path.",
+                "Confirm the path dependency is intentional.",
+                "dependency-cargo-path:Cargo.toml:12",
+            )],
+            discovered_files: 1,
+            scanned_files: 1,
+            ignored_files: 0,
+            scanners_run: 1,
+            finding_history: FindingHistorySummary::default(),
+            finding_baseline: FindingBaselineSummary::default(),
+        };
+
+        let decision = report.evaluate(
+            EnforcementMode::Standard,
+            &ReceiptIndex::default(),
+            ProtectedAction::Push,
+        );
+        assert_eq!(decision.verdict, Verdict::Warn);
+        assert_eq!(decision.blocking_findings.len(), 0);
+        assert_eq!(decision.warning_findings.len(), 1);
     }
 
     #[test]
@@ -361,6 +459,8 @@ mod tests {
             scanned_files: 1,
             ignored_files: 0,
             scanners_run: 1,
+            finding_history: FindingHistorySummary::default(),
+            finding_baseline: FindingBaselineSummary::default(),
         };
 
         let decision = report.evaluate(
@@ -391,6 +491,8 @@ mod tests {
             scanned_files: 1,
             ignored_files: 0,
             scanners_run: 1,
+            finding_history: FindingHistorySummary::default(),
+            finding_baseline: FindingBaselineSummary::default(),
         };
 
         let decision = report.evaluate(
@@ -443,6 +545,8 @@ mod tests {
             scanned_files: 1,
             ignored_files: 0,
             scanners_run: 1,
+            finding_history: FindingHistorySummary::default(),
+            finding_baseline: FindingBaselineSummary::default(),
         };
 
         let decision = report.evaluate(

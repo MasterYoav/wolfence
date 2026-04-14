@@ -13,10 +13,13 @@ use crate::app::{AppError, AppResult};
 use crate::cli::ReceiptCommand;
 use crate::core::findings::FindingCategory;
 use crate::core::git;
-use crate::core::receipt_policy::{validate_signed_receipt_fields, ReceiptApprovalPolicy};
+use crate::core::receipt_policy::{
+    validate_signed_receipt_fields, EffectiveReceiptPolicy, ReceiptApprovalPolicy,
+};
 use crate::core::receipts::{
-    draft_checksum, generate_receipt_id, load_receipt_draft, render_receipt_file,
-    signed_receipt_payload, today_utc_date, ReceiptDraft, ReceiptIndex, RECEIPTS_DIR_RELATIVE_PATH,
+    draft_checksum, generate_receipt_id, iso_date_after_days, iso_date_lifetime_days,
+    load_receipt_draft, render_receipt_file, signed_receipt_payload, today_utc_date, ReceiptDraft,
+    ReceiptIndex, RECEIPTS_DIR_RELATIVE_PATH,
 };
 use crate::core::trust::{sign_payload_with_private_key, TrustStore};
 
@@ -143,7 +146,12 @@ fn run_new(
     let receipt_path = resolve_new_receipt_path(&repo_root, receipt_path)?;
     let action = parse_receipt_action(action)?;
     let category = parse_receipt_category(category)?;
+    let trust = TrustStore::load_for_repo(&repo_root)?;
+    let approval_policy = ReceiptApprovalPolicy::load_for_repo(&repo_root)?;
+    let effective_policy = approval_policy.effective_for(category);
     let created_on = today_utc_date();
+    let expires_on =
+        resolve_expires_on_input(expires_on.trim(), category, &created_on, &effective_policy)?;
     let mut draft = ReceiptDraft {
         receipt_id: String::new(),
         action,
@@ -154,11 +162,11 @@ fn run_new(
         reviewed_on: None,
         reason: reason.trim().to_string(),
         created_on,
-        expires_on: expires_on.trim().to_string(),
+        expires_on,
         category_bound: true,
     };
     draft.receipt_id = generate_receipt_id(&draft)?;
-    validate_new_draft(&draft)?;
+    validate_new_draft(&draft, &effective_policy)?;
     let checksum = draft_checksum(&draft)?;
     let rendered = render_receipt_file(&draft, &checksum, None, None, None);
 
@@ -177,7 +185,19 @@ fn run_new(
     println!("  owner: {}", draft.owner);
     println!("  created_on: {}", draft.created_on);
     println!("  expires_on: {}", draft.expires_on);
+    if let Some(lifetime_days) = iso_date_lifetime_days(&draft.created_on, &draft.expires_on) {
+        println!("  lifetime_days: {lifetime_days}");
+    }
     println!("  checksum: {checksum}");
+    print_receipt_policy_guidance(&effective_policy, category);
+    println!(
+        "  next step: {}",
+        next_receipt_step(
+            &display_repo_relative(&repo_root, &receipt_path),
+            &effective_policy,
+            &trust
+        )
+    );
     println!("  result: canonical unsigned receipt draft created");
 
     Ok(ExitCode::SUCCESS)
@@ -395,8 +415,9 @@ fn run_sign(
     println!("  approver: {approver}");
     println!("  key_id: {key_id}");
     println!("  checksum: {checksum}");
+    print_receipt_policy_guidance(&effective_policy, signed_draft.category);
     println!("  signature: wrote detached hex signature into the receipt file");
-    println!("  result: receipt updated in place");
+    println!("  result: receipt updated in place and brought into signed-review form");
 
     Ok(ExitCode::SUCCESS)
 }
@@ -564,7 +585,123 @@ fn parse_receipt_category(value: &str) -> AppResult<FindingCategory> {
     })
 }
 
-fn validate_new_draft(draft: &ReceiptDraft) -> AppResult<()> {
+fn resolve_expires_on_input(
+    input: &str,
+    category: FindingCategory,
+    created_on: &str,
+    policy: &EffectiveReceiptPolicy,
+) -> AppResult<String> {
+    let trimmed = input.trim();
+    if trimmed.eq_ignore_ascii_case("auto") {
+        let recommended_days = recommended_receipt_lifetime_days(category, policy);
+        return iso_date_after_days(created_on, recommended_days).ok_or_else(|| {
+            AppError::Config(
+                "receipt expiry could not be derived from the current date.".to_string(),
+            )
+        });
+    }
+
+    if let Some(days_value) = trimmed
+        .strip_prefix('+')
+        .and_then(|value| value.strip_suffix('d'))
+    {
+        let days = days_value.parse::<u32>().map_err(|_| {
+            AppError::Config(format!(
+                "unsupported receipt expiry shorthand `{trimmed}`. Use `+<days>d`, `auto`, or `YYYY-MM-DD`."
+            ))
+        })?;
+        return iso_date_after_days(created_on, days).ok_or_else(|| {
+            AppError::Config(
+                "receipt expiry could not be derived from the current date.".to_string(),
+            )
+        });
+    }
+
+    if is_iso_date(trimmed) {
+        return Ok(trimmed.to_string());
+    }
+
+    Err(AppError::Config(format!(
+        "unsupported receipt expiry `{trimmed}`. Use `YYYY-MM-DD`, `auto`, or `+<days>d`."
+    )))
+}
+
+fn recommended_receipt_lifetime_days(
+    category: FindingCategory,
+    policy: &EffectiveReceiptPolicy,
+) -> u32 {
+    let baseline_days = match category {
+        FindingCategory::Secret | FindingCategory::Configuration | FindingCategory::Policy => 7,
+        FindingCategory::Dependency | FindingCategory::Vulnerability => 14,
+    };
+
+    policy
+        .max_lifetime_days
+        .map(|max_lifetime_days| baseline_days.min(max_lifetime_days))
+        .unwrap_or(baseline_days)
+}
+
+fn print_receipt_policy_guidance(policy: &EffectiveReceiptPolicy, category: FindingCategory) {
+    println!("  policy: {} receipt governance", category);
+    println!(
+        "  signed_receipts_required: {}",
+        policy.require_signed_receipts
+    );
+    println!(
+        "  reviewer_metadata_required: {}",
+        policy.require_reviewer_metadata
+    );
+    println!(
+        "  max_lifetime_days: {}",
+        policy
+            .max_lifetime_days
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unset".to_string())
+    );
+    if !policy.allowed_reviewers.is_empty() {
+        println!(
+            "  allowed_reviewers: {}",
+            policy.allowed_reviewers.join(", ")
+        );
+    }
+    if !policy.allowed_approvers.is_empty() {
+        println!(
+            "  allowed_approvers: {}",
+            policy.allowed_approvers.join(", ")
+        );
+    }
+    if !policy.allowed_key_ids.is_empty() {
+        println!("  allowed_key_ids: {}", policy.allowed_key_ids.join(", "));
+    }
+}
+
+fn next_receipt_step(
+    receipt_path: &str,
+    policy: &EffectiveReceiptPolicy,
+    trust: &TrustStore,
+) -> String {
+    if policy.require_signed_receipts || trust.requires_signed_receipts() {
+        let key_hint = if policy.allowed_key_ids.len() == 1 {
+            format!(
+                " <approver> {} <private-key-path>",
+                policy.allowed_key_ids[0]
+            )
+        } else {
+            " <approver> <key-id> <private-key-path>".to_string()
+        };
+        return format!("run `wolf receipt sign {receipt_path}{key_hint}`");
+    }
+
+    if policy.require_reviewer_metadata {
+        return format!(
+            "run `wolf receipt sign {receipt_path} <approver> <key-id> <private-key-path>` so reviewer metadata is recorded."
+        );
+    }
+
+    "review the draft, then keep or sign it before relying on it during push.".to_string()
+}
+
+fn validate_new_draft(draft: &ReceiptDraft, policy: &EffectiveReceiptPolicy) -> AppResult<()> {
     if draft.fingerprint.is_empty() {
         return Err(AppError::Config(
             "receipt fingerprint cannot be empty.".to_string(),
@@ -593,6 +730,20 @@ fn validate_new_draft(draft: &ReceiptDraft) -> AppResult<()> {
         return Err(AppError::Config(
             "receipt expiry cannot be earlier than the creation date.".to_string(),
         ));
+    }
+
+    if let Some(max_lifetime_days) = policy.max_lifetime_days {
+        let Some(lifetime_days) = iso_date_lifetime_days(&draft.created_on, &draft.expires_on)
+        else {
+            return Err(AppError::Config(
+                "receipt lifetime could not be evaluated.".to_string(),
+            ));
+        };
+        if lifetime_days > max_lifetime_days {
+            return Err(AppError::Config(format!(
+                "receipt lifetime of {lifetime_days} day(s) exceeds the policy maximum of {max_lifetime_days}. Use `auto` or a shorter expiry."
+            )));
+        }
     }
 
     Ok(())
@@ -626,6 +777,7 @@ fn print_help() {
     );
     println!("      Create one canonical unsigned receipt draft inside .wolfence/receipts/");
     println!("      categories: secret | vulnerability | dependency | configuration | policy");
+    println!("      expires-on: YYYY-MM-DD | auto | +<days>d");
     println!("  checksum <receipt-path>");
     println!("      Compute the canonical checksum for one receipt file");
     println!("  verify <receipt-path>");
@@ -644,10 +796,15 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        build_archive_path, list_archived_receipts, resolve_new_receipt_path, resolve_receipt_path,
-        RECEIPTS_ARCHIVE_DIR_RELATIVE_PATH,
+        build_archive_path, list_archived_receipts, next_receipt_step,
+        recommended_receipt_lifetime_days, resolve_expires_on_input, resolve_new_receipt_path,
+        resolve_receipt_path, validate_new_draft, RECEIPTS_ARCHIVE_DIR_RELATIVE_PATH,
     };
-    use crate::core::receipts::RECEIPTS_DIR_RELATIVE_PATH;
+    use crate::core::context::ProtectedAction;
+    use crate::core::findings::FindingCategory;
+    use crate::core::receipt_policy::EffectiveReceiptPolicy;
+    use crate::core::receipts::{ReceiptDraft, RECEIPTS_DIR_RELATIVE_PATH};
+    use crate::core::trust::TrustStore;
 
     #[test]
     fn rejects_paths_outside_receipts_directory() {
@@ -725,6 +882,108 @@ mod tests {
         assert_eq!(archived.len(), 2);
         assert!(archived[0].ends_with("2026-04-09-a.toml"));
         assert!(archived[1].ends_with("2026-04-09-b.toml"));
+    }
+
+    #[test]
+    fn auto_expiry_uses_policy_bounded_recommendation() {
+        let policy = EffectiveReceiptPolicy {
+            require_signed_receipts: false,
+            max_lifetime_days: Some(3),
+            require_reviewer_metadata: false,
+            allowed_reviewers: Vec::new(),
+            allowed_approvers: Vec::new(),
+            allowed_key_ids: Vec::new(),
+        };
+
+        let expires_on =
+            resolve_expires_on_input("auto", FindingCategory::Secret, "2026-04-10", &policy)
+                .expect("auto expiry should resolve");
+
+        assert_eq!(expires_on, "2026-04-13");
+    }
+
+    #[test]
+    fn relative_expiry_shorthand_resolves_from_created_date() {
+        let policy = EffectiveReceiptPolicy {
+            require_signed_receipts: false,
+            max_lifetime_days: None,
+            require_reviewer_metadata: false,
+            allowed_reviewers: Vec::new(),
+            allowed_approvers: Vec::new(),
+            allowed_key_ids: Vec::new(),
+        };
+
+        let expires_on =
+            resolve_expires_on_input("+5d", FindingCategory::Dependency, "2026-04-10", &policy)
+                .expect("relative expiry should resolve");
+
+        assert_eq!(expires_on, "2026-04-15");
+    }
+
+    #[test]
+    fn validates_new_drafts_against_policy_lifetime() {
+        let draft = ReceiptDraft {
+            receipt_id: "wr_example".to_string(),
+            action: ProtectedAction::Push,
+            category: FindingCategory::Secret,
+            fingerprint: "secret:abc".to_string(),
+            owner: "yoav".to_string(),
+            reviewer: None,
+            reviewed_on: None,
+            reason: "temporary exception".to_string(),
+            created_on: "2026-04-10".to_string(),
+            expires_on: "2026-04-20".to_string(),
+            category_bound: true,
+        };
+        let policy = EffectiveReceiptPolicy {
+            require_signed_receipts: false,
+            max_lifetime_days: Some(7),
+            require_reviewer_metadata: false,
+            allowed_reviewers: Vec::new(),
+            allowed_approvers: Vec::new(),
+            allowed_key_ids: Vec::new(),
+        };
+
+        let error = validate_new_draft(&draft, &policy).expect_err("lifetime should fail");
+        assert!(error.to_string().contains("Use `auto` or a shorter expiry"));
+    }
+
+    #[test]
+    fn next_step_prefers_sign_command_when_policy_requires_signatures() {
+        let policy = EffectiveReceiptPolicy {
+            require_signed_receipts: true,
+            max_lifetime_days: Some(7),
+            require_reviewer_metadata: true,
+            allowed_reviewers: vec!["security-team".to_string()],
+            allowed_approvers: vec!["security-team".to_string()],
+            allowed_key_ids: vec!["security-team".to_string()],
+        };
+        let trust = TrustStore::default();
+
+        let next = next_receipt_step(".wolfence/receipts/test.toml", &policy, &trust);
+
+        assert!(next.contains("wolf receipt sign .wolfence/receipts/test.toml <approver> security-team <private-key-path>"));
+    }
+
+    #[test]
+    fn recommends_shorter_defaults_for_higher_risk_categories() {
+        let policy = EffectiveReceiptPolicy {
+            require_signed_receipts: false,
+            max_lifetime_days: None,
+            require_reviewer_metadata: false,
+            allowed_reviewers: Vec::new(),
+            allowed_approvers: Vec::new(),
+            allowed_key_ids: Vec::new(),
+        };
+
+        assert_eq!(
+            recommended_receipt_lifetime_days(FindingCategory::Secret, &policy),
+            7
+        );
+        assert_eq!(
+            recommended_receipt_lifetime_days(FindingCategory::Dependency, &policy),
+            14
+        );
     }
 
     fn make_temp_repo(name: &str) -> PathBuf {

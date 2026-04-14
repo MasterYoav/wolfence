@@ -1,0 +1,22 @@
+{
+  "prepare": "stage",
+  "expectations": {
+    "staged": {
+      "verdict": "block",
+      "finding_ids": [
+        "sast.command-injection.untrusted-input",
+        "sast.ssrf.untrusted-url",
+        "sast.path-traversal.untrusted-path",
+        "sast.unsafe-deserialization"
+      ],
+      "json": {
+        "status": "ready",
+        "result": "blocked",
+        "has_report": true,
+        "has_decision": true,
+        "has_finding_history": true,
+        "has_finding_baseline": true
+      }
+    }
+  }
+}

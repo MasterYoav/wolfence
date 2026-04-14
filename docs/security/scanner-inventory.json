@@ -1,0 +1,269 @@
+{
+  "version": 1,
+  "scanners": [
+    {
+      "name": "secret-scanner",
+      "rust_surface": "src/core/scanners.rs",
+      "purpose": "credential, token, key, and embedded secret detection",
+      "state": "shipped"
+    },
+    {
+      "name": "basic-sast",
+      "rust_surface": "src/core/scanners.rs",
+      "purpose": "high-signal appsec heuristics for obviously dangerous execution or parsing paths",
+      "state": "partial"
+    },
+    {
+      "name": "artifact-scanner",
+      "rust_surface": "src/core/scanners.rs",
+      "purpose": "opaque archive, binary, and suspicious generated bundle inspection",
+      "state": "partial"
+    },
+    {
+      "name": "dependency-scanner",
+      "rust_surface": "src/core/scanners.rs and src/core/osv.rs",
+      "purpose": "manifest, lockfile, provenance, and live advisory checks",
+      "state": "partial"
+    },
+    {
+      "name": "config-scanner",
+      "rust_surface": "src/core/scanners.rs",
+      "purpose": "CI, Docker, Kubernetes, infrastructure exposure, and release-attestation posture checks",
+      "state": "partial"
+    },
+    {
+      "name": "policy-scanner",
+      "rust_surface": "src/core/scanners.rs",
+      "purpose": "Wolfence local policy, trust, override authority, and hook-integrity checks",
+      "state": "partial"
+    }
+  ],
+  "coverage_families": [
+    {
+      "family": "Secrets and credential exposure",
+      "state": "shipped",
+      "current_coverage": [
+        "sensitive file paths",
+        "prefixed service tokens",
+        "private-key material",
+        "suspicious secret assignments",
+        "inline auth headers",
+        "cookie and session secrets",
+        "registry auth files",
+        "webhook URLs",
+        "connection-string secrets"
+      ],
+      "known_gaps": [
+        "more cloud and SaaS token families",
+        "structured secret parsing beyond line heuristics",
+        "decoded or transformed secret representations"
+      ]
+    },
+    {
+      "family": "Dependency and supply-chain risk",
+      "state": "partial",
+      "current_coverage": [
+        "Cargo, npm, pnpm, Yarn, Go modules, Bundler, Poetry, uv, Pipenv, and pinned Python requirements",
+        "lockfile relationship checks",
+        "direct source detection",
+        "tracked package-manager registry config posture",
+        "custom index posture",
+        "dependency-confusion posture for custom registries and unqualified package names",
+        "repo-local Node and Python internal package exact-name and prefix allowlists in .wolfence/config.toml",
+        "owner-host mismatch detection from node_registry_ownership, ruby_source_ownership, and python_index_ownership across tracked config, changed lockfiles (package-lock.json, npm-shrinkwrap.json, pnpm-lock.yaml, yarn.lock, Gemfile.lock, gems.locked, poetry.lock, uv.lock, Pipfile.lock), and explicit direct-source manifest entries in package.json, Gemfile, gems.rb, pyproject.toml, Pipfile, and requirements*.txt",
+        "direct-source bypass detection when declared internal packages use Git, archive, file, path, or editable-style sources instead of normal registry or index flow, including in uv.lock, poetry.lock, and Pipfile.lock",
+        "OSV exact-version querying on supported files"
+      ],
+      "known_gaps": [
+        "broader ecosystems",
+        "full structural parsing for every supported format",
+        "transitive graph resolution",
+        "per-package registry semantics beyond current host-and-pattern policy",
+        "maintainer or reputation signals"
+      ]
+    },
+    {
+      "family": "CI, IaC, and deployment configuration",
+      "state": "partial",
+      "current_coverage": [
+        "GitHub Actions hardening",
+        "branch-push publish detection",
+        "GitHub Release, Goreleaser, and semantic-release action publication detection",
+        "long-lived GitHub release credential detection",
+        "attestation-permission checks",
+        "trusted-publishing permission checks",
+        "keyless-signing permission checks",
+        "long-lived registry-credential publish detection",
+        "OCI long-lived registry-credential detection",
+        "long-lived signing-credential detection",
+        "OCI publish provenance checks for docker/build-push-action",
+        "mutable release-ref detection",
+        "branch workflows that mint tags",
+        "Docker base-image pinning",
+        "Docker final-stage explicit root-user detection",
+        "Docker remote-installer pipe detection",
+        "Docker remote download-and-execute detection",
+        "Docker remote ADD source detection",
+        "Kubernetes Secret inline data",
+        "Kubernetes RBAC wildcard and cluster-admin binding checks",
+        "Kubernetes pod-hardening checks for privileged mode, privilege escalation, host namespaces, hostPath, and root posture",
+        "Kubernetes ingress HTTPS-redirect disablement detection",
+        "Kubernetes sensitive ingress-path exposure checks",
+        "Kubernetes Pod Security privileged-enforcement detection",
+        "Kubernetes admission webhook fail-open detection",
+        "Terraform and OpenTofu public-storage checks",
+        "Terraform and OpenTofu remote-state encryption-disablement detection",
+        "Terraform and OpenTofu insecure HTTP backend detection",
+        "Terraform and OpenTofu secret-bearing output sensitivity-disablement detection",
+        "Terraform and OpenTofu secret-bearing variable sensitivity-disablement detection",
+        "Terraform and OpenTofu inline literal secret-attribute detection",
+        "Terraform and OpenTofu wildcard IAM trust and permission checks",
+        "Terraform and OpenTofu public admin-ingress checks",
+        "Terraform and OpenTofu public sensitive-service ingress checks",
+        "Terraform and OpenTofu public all-ports ingress checks",
+        "broad exposure needles like 0.0.0.0/0"
+      ],
+      "known_gaps": [
+        "broader cloud-provider coverage",
+        "deeper Terraform and OpenTofu structural parsing",
+        "cloud IAM and storage misconfiguration checks beyond current line-level signals",
+        "broader ecosystem-specific trusted-publishing and release-signing posture checks"
+      ]
+    },
+    {
+      "family": "Application security signals",
+      "state": "partial",
+      "current_coverage": [
+        "remote script execution",
+        "dynamic execution sinks",
+        "request-driven command execution",
+        "SSRF-style outbound fetches",
+        "cloud metadata access",
+        "request-driven path sinks",
+        "unsafe deserialization primitives",
+        "string-built SQL query detection with untrusted input",
+        "insecure secret and token randomness detection",
+        "unsafe crypto primitive and mode detection",
+        "request-driven uploaded-file write detection",
+        "request-driven archive extraction detection",
+        "request-driven privilege assignment detection",
+        "privileged-surface access-control bypass marker detection"
+      ],
+      "known_gaps": [
+        "broader language-aware taint tracking"
+      ]
+    },
+    {
+      "family": "Repository governance and release safety",
+      "state": "partial",
+      "current_coverage": [
+        "repo-local config presence",
+        "release workflow trust checks",
+        "external hooks-path review",
+        "external hook-symlink review",
+        "external hook-helper review",
+        "legacy managed-hook launcher detection",
+        "missing or malformed CODEOWNERS",
+        "duplicate CODEOWNERS files",
+        "uncovered governance-sensitive paths such as workflows and .wolfence/*",
+        "semantic checks for repo-admin settings and rulesets including required signed-commit, linear-history, conversation-resolution, and status-check governance"
+      ],
+      "known_gaps": [
+        "live branch protection posture beyond current doctor checks",
+        "broader hook tamper detection beyond current launcher, path, external-symlink, and helper-indirection signals",
+        "broader release signing and provenance validation",
+        "deeper ownership semantics than current local CODEOWNERS matching"
+      ]
+    },
+    {
+      "family": "Binary and artifact inspection",
+      "state": "partial",
+      "current_coverage": [
+        "artifact download plus execute detection in GitHub Actions",
+        "packaged archive detection",
+        "zip-like archive entry traversal detection",
+        "zip-like archive embedded executable detection",
+        "compiled binary detection",
+        "suspicious minified remote-loader bundle detection",
+        "minified bundle beaconing detection",
+        "source map artifact detection",
+        "generated-asset embedded secret detection",
+        "new executable text launcher provenance detection"
+      ],
+      "known_gaps": [
+        "deeper archive contents inspection beyond current zip-like entry-name checks"
+      ]
+    },
+    {
+      "family": "Wolfence self-protection",
+      "state": "partial",
+      "current_coverage": [
+        "scanner-bundle surface change detection",
+        "scanner-bundle changes without local rule-provenance updates",
+        "repo-local config change detection",
+        "advisory-mode downgrade detection",
+        "sensitive ignore-path detection",
+        "receipt-policy change detection",
+        "trust-store change detection",
+        "override-receipt change detection",
+        "external hooks-path review",
+        "external hook-symlink detection",
+        "external hook-helper detection",
+        "repo-local alternate hooks-path detection",
+        "additional unmanaged executable hook detection",
+        "managed-hook launcher drift detection",
+        "native pre-push transport validation against the evaluated current-branch snapshot",
+        "push-snapshot revalidation elsewhere in the product"
+      ],
+      "known_gaps": [
+        "broader unmanaged hook replacement detection beyond current alternate-path, external-symlink, helper-indirection, and additional-hook checks",
+        "signed or external rule-distribution provenance beyond current repo-local inventory coupling",
+        "broader time-of-check to time-of-push coverage beyond the current native branch-push guard and wolf push snapshot revalidation"
+      ]
+    }
+  ],
+  "file_format_coverage": {
+    "dependency": [
+      "Cargo.toml",
+      "Cargo.lock",
+      ".cargo/config",
+      ".cargo/config.toml",
+      "package.json",
+      ".npmrc",
+      "package-lock.json",
+      "npm-shrinkwrap.json",
+      "pnpm-lock.yaml",
+      "yarn.lock",
+      ".yarnrc.yml",
+      ".yarnrc.yaml",
+      "go.mod",
+      "go.sum",
+      "Gemfile",
+      "Gemfile.lock",
+      "gems.rb",
+      "gems.locked",
+      "pyproject.toml",
+      "poetry.lock",
+      "uv.lock",
+      "Pipfile",
+      "Pipfile.lock",
+      "requirements*.txt"
+    ],
+    "config": [
+      ".github/workflows/*",
+      "Dockerfile",
+      "Kubernetes YAML or JSON content that defines Secrets, RBAC resources, bindings, or pod runtime security fields",
+      "Terraform and OpenTofu .tf files through current IAM, public-storage, and network-posture checks"
+    ],
+    "appsec_languages": [
+      "JavaScript and TypeScript",
+      "Python",
+      "Java and JVM-adjacent build files",
+      "PHP",
+      "Ruby",
+      "Go",
+      "C#",
+      "shell and PowerShell execution surfaces"
+    ]
+  }
+}

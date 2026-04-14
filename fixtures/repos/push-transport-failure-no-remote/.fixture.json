@@ -1,0 +1,30 @@
+{
+  "prepare": "commit",
+  "expectations": {
+    "push": {
+      "verdict": "allow",
+      "command_exit": "failure",
+      "not_finding_ids": [
+        "secret.file.env",
+        "secret.authorization.inline",
+        "config.dockerfile.unpinned-base-image"
+      ],
+      "json": {
+        "status": "ready",
+        "result": "completed",
+        "has_report": true,
+        "has_decision": true,
+        "has_finding_history": true,
+        "has_finding_baseline": true
+      },
+      "audit": {
+        "entries": 2,
+        "healthy": true,
+        "outcomes": [
+          "policy-allowed",
+          "push-failed"
+        ]
+      }
+    }
+  }
+}

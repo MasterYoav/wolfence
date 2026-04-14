@@ -14,6 +14,7 @@ Scanning alone is not enough. A local gate can still fail operationally if:
 - override receipts are malformed, expired, or ignored
 - signed receipts are required but cannot be verified
 - live advisory lookups are disabled or unsupported unexpectedly
+- live GitHub governance verification is disabled, unavailable, or drifting from repo-as-code intent unexpectedly
 - the shell is overriding the configured mode
 - dry-run mode is still enabled
 - the managed hook is missing
@@ -90,6 +91,7 @@ Warns when:
 - `WOLFENCE_MODE` is overriding repo policy
 - `WOLFENCE_DRY_RUN` is changing push behavior
 - `WOLFENCE_OSV` is changing live advisory behavior
+- `WOLFENCE_GITHUB_GOVERNANCE` is changing live GitHub governance verification behavior
 
 These are useful development tools, but they should never be invisible.
 
@@ -111,6 +113,11 @@ the prototype because the demo path requires real commits.
 
 Checks whether `curl` is available because the current OSV integration uses it
 for bounded live advisory queries.
+
+### GitHub CLI runtime
+
+Checks whether `gh` is available because the current live GitHub governance
+verification uses GitHub CLI authentication and `gh api`.
 
 ### OpenSSL runtime
 
@@ -154,6 +161,24 @@ Reports whether:
 
 This is informational context for the current repository state.
 
+### Live GitHub governance
+
+When `WOLFENCE_GITHUB_GOVERNANCE` is `auto` or `require`, doctor also compares
+local repo-as-code governance intent against live GitHub state.
+
+Current scope includes:
+
+- protected-branch posture inferred from `.github/settings.yml` or
+  `.github/repository.yml`, across locally declared governed branches and the
+  default branch fallback
+- live ruleset presence and active enforcement compared with local
+  `.github/rulesets/*`
+- drift such as live force-push allowance, disabled admin enforcement, missing
+  code-owner review, too-few approvals, or missing active rulesets
+
+If the repository is not hosted on GitHub, or if no local governance intent is
+present, this check becomes informational instead of warning or failure.
+
 ## Exit Behavior
 
 `wolf doctor` exits non-zero only when it finds blocking environment
@@ -165,6 +190,7 @@ failures, such as:
 - a repository with trusted receipt keys but no working OpenSSL runtime
 - a repository that publishes only expired trust keys
 - a repository that requires signed receipts but has no active trusted keys
+- required live GitHub governance verification that cannot run
 
 Warnings do not fail the command, but they should not be ignored.
 

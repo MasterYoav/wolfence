@@ -1,13 +1,15 @@
-# Wolfence SwiftUI Handoff
+# Wolfence SwiftUI Product Contract
 
-This document is for Codex in Xcode.
+This document is for ongoing Wolfence macOS app work in Xcode.
 
-Its job is to explain how to translate Wolfence's existing CLI states, audit
-log, and repository-local policy surfaces into a native SwiftUI application
-without inventing a different product model.
+The root-level macOS app already exists. This document defines the product
+translation rules it should keep following as the app grows.
 
 The app should feel like a native operator console for a local security gate,
 not a generic log viewer.
+
+For the current shipped implementation and file layout, see
+[macos-console.md](/Users/yoavperetz/Developer/Wolfence/docs/ui/macos-console.md).
 
 ## Product Rule
 
@@ -22,8 +24,9 @@ The app should therefore center:
 
 1. current push posture
 2. current health / doctor posture
-3. recent audit trail
-4. findings and exceptions
+3. live GitHub governance drift when available
+4. remediation-driven findings and exceptions
+5. recent audit trail
 
 ## Source Of Truth Order
 
@@ -73,7 +76,17 @@ struct UIFinding: Identifiable, Hashable {
     var title: String
     var detail: String
     var remediation: String
+    var remediationAdvice: UIRemediationAdvice
     var fingerprint: String
+}
+
+struct UIRemediationAdvice: Hashable {
+    var kind: String
+    var urgency: String
+    var ownerSurface: String
+    var primaryAction: String
+    var primaryCommand: String?
+    var docsRef: String?
 }
 ```
 
@@ -82,6 +95,8 @@ Enums:
 - `FindingSeverity`: `info`, `low`, `medium`, `high`, `critical`
 - `FindingConfidence`: `low`, `medium`, `high`
 - `FindingCategory`: `secret`, `vulnerability`, `dependency`, `configuration`, `policy`
+- remediation metadata should drive grouped "Fix Now" UI instead of forcing the
+  app to re-infer operator priority from raw free-text remediation strings
 
 ### Scan Report
 
@@ -471,6 +486,9 @@ Useful patterns:
 Do not build the app around fragile full-text regex matching if the same data
 can be read from files or normalized state adapters.
 
+Human-readable command parsing is a fallback only. Prefer repo-local files and
+`--json` surfaces whenever they exist.
+
 ## Recommended Swift Architecture
 
 Use four layers:
@@ -495,25 +513,37 @@ Recommended view models:
 - `AuditTimelineViewModel`
 - `PolicyViewModel`
 
-## Recommended First App Scope
+## Current Shipped Scope
 
-The first version should ship only these features:
+The current root-level app already ships these capabilities:
 
-1. repo picker / repo root display
-2. run `wolf doctor`
-3. run `wolf scan push`
-4. run `wolf push`
-5. render latest audit timeline from JSONL
+1. persistent repository workspace sidebar
+2. repo picker and repo root display
+3. `wolf doctor --json`
+4. `wolf scan push --json`
+5. repo-local config and receipt-policy reads
+6. audit timeline rendering from JSONL
+7. current findings, scan scope, and priority doctor checks
 
-Do not start with receipt editing, trust editing, or config editing.
-Those can come later.
+The current app does not yet need receipt editing, trust editing, or config
+editing.
+
+## Next Expansion Scope
+
+The most natural next steps are:
+
+1. drive a protected `wolf push` flow from the app without bypassing the Rust gate
+2. expose richer trust posture and receipt inventory
+3. add timeline filtering and deeper repository comparisons
+4. preserve the existing source-of-truth order instead of introducing UI-only logic
 
 ## Future-Proofing Rule
 
-The current CLI is human-readable, not JSON-first.
+Wolfence now has meaningful JSON surfaces, but not every future CLI behavior
+will land in the app at the same time.
 
-So the app should isolate parsing behind adapters and keep UI models stable.
-When Wolfence later gains machine-readable command output, only the adapter
+So the app should still isolate parsing behind adapters and keep UI models
+stable. When Wolfence adds richer machine-readable output, only the adapter
 layer should change.
 
 ## Non-Negotiable UI Principle

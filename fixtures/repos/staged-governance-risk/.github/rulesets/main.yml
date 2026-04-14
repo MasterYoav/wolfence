@@ -1,0 +1,14 @@
+name: main
+target: branch
+enforcement: evaluate
+bypass_actors:
+  - actor_id: 1
+    actor_type: RepositoryRole
+conditions:
+  ref_name:
+    include:
+      - refs/heads/main
+rules:
+  - type: non_fast_forward
+    parameters:
+      enabled: false

@@ -1,0 +1,5 @@
+--extra-index-url https://packages.example.com/simple
+--trusted-host packages.example.com
+--find-links https://downloads.example.com/python/
+private-sdk @ https://downloads.example.com/private-sdk-1.2.3.tar.gz
+requests>=2.31

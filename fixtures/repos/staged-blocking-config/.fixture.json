@@ -1,0 +1,22 @@
+{
+  "prepare": "stage",
+  "expectations": {
+    "staged": {
+      "verdict": "block",
+      "finding_ids": [
+        "config.github-actions.pull-request-target",
+        "config.github-actions.pull-request-target.checkout-credentials",
+        "config.github-actions.unpinned-third-party-action",
+        "config.dockerfile.unpinned-base-image"
+      ],
+      "json": {
+        "status": "ready",
+        "result": "blocked",
+        "has_report": true,
+        "has_decision": true,
+        "has_finding_history": true,
+        "has_finding_baseline": true
+      }
+    }
+  }
+}

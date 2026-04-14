@@ -1,0 +1,20 @@
+{
+  "prepare": "stage",
+  "expectations": {
+    "staged": {
+      "verdict": "block",
+      "finding_ids": [
+        "config.github-governance.force-push",
+        "config.github-governance.ruleset-not-active"
+      ],
+      "json": {
+        "status": "ready",
+        "result": "blocked",
+        "has_report": true,
+        "has_decision": true,
+        "has_finding_history": true,
+        "has_finding_baseline": true
+      }
+    }
+  }
+}

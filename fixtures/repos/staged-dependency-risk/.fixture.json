@@ -1,0 +1,21 @@
+{
+  "prepare": "stage",
+  "expectations": {
+    "staged": {
+      "verdict": "block",
+      "finding_ids": [
+        "dependency.python.requirements.extra-index",
+        "dependency.python.requirements.direct-source",
+        "dependency.python.requirements.unpinned"
+      ],
+      "json": {
+        "status": "ready",
+        "result": "blocked",
+        "has_report": true,
+        "has_decision": true,
+        "has_finding_history": true,
+        "has_finding_baseline": true
+      }
+    }
+  }
+}

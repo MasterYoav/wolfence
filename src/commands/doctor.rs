@@ -15,6 +15,7 @@ use crate::core::audit;
 use crate::core::config::{ConfigSource, ResolvedConfig, REPO_CONFIG_RELATIVE_PATH};
 use crate::core::git;
 use crate::core::git::PushStatus;
+use crate::core::github_governance::{self, GithubGovernanceMode};
 use crate::core::hooks::{self, HookLauncherKind, HookState};
 use crate::core::osv::OsvMode;
 use crate::core::policy::EnforcementMode;
@@ -143,6 +144,7 @@ fn build_checks(repo_root: &Path, config: &ResolvedConfig) -> AppResult<Vec<Doct
     checks.push(check_policy_posture(config));
     checks.push(check_scan_ignore_paths(config));
     checks.push(check_osv_mode()?);
+    checks.push(check_github_governance_mode()?);
 
     if let Some(check) = check_environment_override(config) {
         checks.push(check);
@@ -156,11 +158,13 @@ fn build_checks(repo_root: &Path, config: &ResolvedConfig) -> AppResult<Vec<Doct
     checks.push(check_git_identity(repo_root)?);
     checks.push(check_push_remote(repo_root)?);
     checks.push(check_curl_runtime());
+    checks.push(check_gh_runtime());
     checks.push(check_openssl_runtime(repo_root)?);
     checks.push(check_pre_push_hook(repo_root)?);
     checks.push(check_audit_log(repo_root)?);
     checks.push(check_receipt_posture(repo_root)?);
     checks.push(check_push_window(repo_root, config)?);
+    checks.push(check_live_github_governance(repo_root)?);
 
     Ok(checks)
 }
@@ -446,6 +450,34 @@ fn check_osv_mode() -> AppResult<DoctorCheck> {
 
     Ok(DoctorCheck {
         name: "OSV advisory mode",
+        status,
+        detail,
+        remediation,
+    })
+}
+
+fn check_github_governance_mode() -> AppResult<DoctorCheck> {
+    let mode = GithubGovernanceMode::resolve()?;
+    let (status, detail, remediation) = match mode {
+        GithubGovernanceMode::Off => (
+            DoctorStatus::Warn,
+            "live GitHub governance verification is disabled via WOLFENCE_GITHUB_GOVERNANCE=off.".to_string(),
+            Some("Use the default `auto` mode or `require` if you want Wolfence doctor to compare repo-as-code governance intent against live GitHub state.".to_string()),
+        ),
+        GithubGovernanceMode::Auto => (
+            DoctorStatus::Pass,
+            "live GitHub governance verification is enabled in best-effort mode for doctor.".to_string(),
+            None,
+        ),
+        GithubGovernanceMode::Require => (
+            DoctorStatus::Pass,
+            "live GitHub governance verification is required for doctor. Verification failures will become blocking doctor failures.".to_string(),
+            None,
+        ),
+    };
+
+    Ok(DoctorCheck {
+        name: "GitHub governance mode",
         status,
         detail,
         remediation,
@@ -834,6 +866,43 @@ fn check_curl_runtime() -> DoctorCheck {
     }
 }
 
+fn check_gh_runtime() -> DoctorCheck {
+    let output = Command::new("gh").arg("--version").output();
+    match output {
+        Ok(command) if command.status.success() => DoctorCheck {
+            name: "gh runtime",
+            status: DoctorStatus::Pass,
+            detail: String::from_utf8_lossy(&command.stdout)
+                .lines()
+                .next()
+                .unwrap_or("gh available")
+                .to_string(),
+            remediation: None,
+        },
+        Ok(command) => DoctorCheck {
+            name: "gh runtime",
+            status: DoctorStatus::Warn,
+            detail: format!(
+                "gh returned a non-success status: {}",
+                String::from_utf8_lossy(&command.stderr).trim()
+            ),
+            remediation: Some(
+                "Install or repair GitHub CLI if you want live GitHub governance verification to succeed."
+                    .to_string(),
+            ),
+        },
+        Err(error) => DoctorCheck {
+            name: "gh runtime",
+            status: DoctorStatus::Warn,
+            detail: format!("failed to execute `gh --version`: {error}"),
+            remediation: Some(
+                "Install GitHub CLI if you want live GitHub governance verification to succeed."
+                    .to_string(),
+            ),
+        },
+    }
+}
+
 fn check_openssl_runtime(repo_root: &Path) -> AppResult<DoctorCheck> {
     let trust = TrustStore::load_for_repo(repo_root)?;
     let output = Command::new("openssl").arg("version").output();
@@ -1060,6 +1129,106 @@ fn check_push_window(repo_root: &Path, config: &ResolvedConfig) -> AppResult<Doc
     Ok(describe_push_window(push_status, config))
 }
 
+fn check_live_github_governance(repo_root: &Path) -> AppResult<DoctorCheck> {
+    let mode = GithubGovernanceMode::resolve()?;
+    if mode == GithubGovernanceMode::Off {
+        return Ok(DoctorCheck {
+            name: "live GitHub governance",
+            status: DoctorStatus::Info,
+            detail: "live GitHub governance verification is disabled, so doctor is not comparing repo-as-code governance intent against GitHub's live server-side state.".to_string(),
+            remediation: Some(
+                "Use the default `auto` mode or `require` if you want Wolfence to compare live GitHub enforcement during doctor and protected push."
+                    .to_string(),
+            ),
+        });
+    }
+
+    match github_governance::verify_live_governance(repo_root) {
+        Ok(verification) => {
+            if verification.repository.is_none() {
+                return Ok(DoctorCheck {
+                    name: "live GitHub governance",
+                    status: DoctorStatus::Info,
+                    detail: "the preferred Git remote is not a GitHub repository, so live GitHub governance verification does not apply.".to_string(),
+                    remediation: None,
+                });
+            }
+
+            if !verification.local_intent_present {
+                return Ok(DoctorCheck {
+                    name: "live GitHub governance",
+                    status: DoctorStatus::Info,
+                    detail: format!(
+                        "no local repo-admin governance intent was detected for `{}`, so there is nothing to compare against live GitHub state.",
+                        verification.repository.as_deref().unwrap_or("<unknown repo>")
+                    ),
+                    remediation: None,
+                });
+            }
+
+            if let Some(reason) = verification.unavailable_reason {
+                return Ok(DoctorCheck {
+                    name: "live GitHub governance",
+                    status: if mode == GithubGovernanceMode::Require {
+                        DoctorStatus::Fail
+                    } else {
+                        DoctorStatus::Warn
+                    },
+                    detail: format!(
+                        "live GitHub governance verification for `{}` could not complete: {reason}",
+                        verification.repository.as_deref().unwrap_or("<unknown repo>")
+                    ),
+                    remediation: Some(
+                        "Authenticate GitHub CLI with `gh auth login`, confirm the repository is reachable, or set WOLFENCE_GITHUB_GOVERNANCE=off if this verification should remain disabled."
+                            .to_string(),
+                    ),
+                });
+            }
+
+            if verification.drifts.is_empty() {
+                return Ok(DoctorCheck {
+                    name: "live GitHub governance",
+                    status: DoctorStatus::Pass,
+                    detail: format!(
+                        "repo-as-code governance intent for `{}` matches live GitHub protection across checked branches ({}) and live rulesets. Default branch: `{}`.",
+                        verification.repository.as_deref().unwrap_or("<unknown repo>"),
+                        verification.checked_branches.join(", "),
+                        verification
+                            .default_branch
+                            .as_deref()
+                            .unwrap_or("<unknown branch>")
+                    ),
+                    remediation: None,
+                });
+            }
+
+            Ok(DoctorCheck {
+                name: "live GitHub governance",
+                status: DoctorStatus::Warn,
+                detail: format!(
+                    "repo-as-code governance intent for `{}` differs from live GitHub state across checked branches ({}): {}",
+                    verification.repository.as_deref().unwrap_or("<unknown repo>"),
+                    verification.checked_branches.join(", "),
+                    verification.drifts.join(" ")
+                ),
+                remediation: Some(
+                    "Align the live GitHub branch protection and rulesets with the repository's governance-as-code intent, or update the repo files so the intended posture is explicit."
+                        .to_string(),
+                ),
+            })
+        }
+        Err(error) => Ok(DoctorCheck {
+            name: "live GitHub governance",
+            status: DoctorStatus::Fail,
+            detail: format!("live GitHub governance verification failed: {error}"),
+            remediation: Some(
+                "Repair GitHub CLI authentication or set WOLFENCE_GITHUB_GOVERNANCE=off if live verification should not be required."
+                    .to_string(),
+            ),
+        }),
+    }
+}
+
 fn describe_push_window(push_status: PushStatus, config: &ResolvedConfig) -> DoctorCheck {
     let (status, detail, remediation) = match push_status {
         PushStatus::NoCommits => (
@@ -1218,6 +1387,13 @@ mod tests {
             repo_config_path: Path::new(".wolfence/config.toml").to_path_buf(),
             repo_config_exists: true,
             scan_ignore_paths: vec!["docs/".to_string(), "src/".to_string()],
+            node_internal_packages: Vec::new(),
+            node_internal_package_prefixes: Vec::new(),
+            node_registry_ownership: Vec::new(),
+            ruby_source_ownership: Vec::new(),
+            python_internal_packages: Vec::new(),
+            python_internal_package_prefixes: Vec::new(),
+            python_index_ownership: Vec::new(),
         };
 
         let check = check_scan_ignore_paths(&config);
@@ -1234,6 +1410,13 @@ mod tests {
             repo_config_path: Path::new(".wolfence/config.toml").to_path_buf(),
             repo_config_exists: true,
             scan_ignore_paths: vec!["docs/".to_string()],
+            node_internal_packages: Vec::new(),
+            node_internal_package_prefixes: Vec::new(),
+            node_registry_ownership: Vec::new(),
+            ruby_source_ownership: Vec::new(),
+            python_internal_packages: Vec::new(),
+            python_internal_package_prefixes: Vec::new(),
+            python_index_ownership: Vec::new(),
         };
 
         let check = describe_push_window(

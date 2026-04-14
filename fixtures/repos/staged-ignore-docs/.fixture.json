@@ -1,0 +1,20 @@
+{
+  "prepare": "stage",
+  "expectations": {
+    "staged": {
+      "verdict": "allow",
+      "not_finding_ids": [
+        "secret.authorization.inline",
+        "secret.file.env"
+      ],
+      "json": {
+        "status": "ready",
+        "result": "completed",
+        "has_report": true,
+        "has_decision": true,
+        "has_finding_history": true,
+        "has_finding_baseline": true
+      }
+    }
+  }
+}

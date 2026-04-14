@@ -11,7 +11,7 @@ use std::{io::Write, process::Stdio};
 use crate::app::{AppError, AppResult};
 
 /// How a protected push relates to local and remote Git history.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PushStatus {
     /// The repository has no commits yet, so there is nothing meaningful to push.
     NoCommits,
@@ -79,6 +79,11 @@ pub fn config_value(repo_root: &Path, key: &str) -> AppResult<Option<String>> {
             String::from_utf8_lossy(&output.stderr).trim().to_string(),
         )),
     }
+}
+
+/// Returns the configured URL for one Git remote in the current repository context.
+pub fn remote_url(repo_root: &Path, remote: &str) -> AppResult<Option<String>> {
+    config_value(repo_root, &format!("remote.{remote}.url"))
 }
 
 /// Reads one repository-relative file as it exists at a specific Git reference.
@@ -245,7 +250,21 @@ pub fn push(
     Ok(())
 }
 
-fn current_branch(repo_root: &Path) -> AppResult<String> {
+/// Verifies that the outbound push snapshot still matches the earlier scanned state.
+pub fn verify_push_status_unchanged(repo_root: &Path, expected: &PushStatus) -> AppResult<()> {
+    let current = push_status(repo_root)?;
+    if &current == expected {
+        return Ok(());
+    }
+
+    Err(AppError::Git(
+        "the outbound push snapshot changed after Wolfence evaluated it. Re-run `wolf push` so the current branch state is rescanned before transport."
+            .to_string(),
+    ))
+}
+
+/// Returns the current local branch name.
+pub fn current_branch(repo_root: &Path) -> AppResult<String> {
     run_git_in_repo(repo_root, &["branch", "--show-current"]).map(|value| value.trim().to_string())
 }
 
@@ -335,7 +354,7 @@ mod tests {
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::preferred_remote;
+    use super::{preferred_remote, verify_push_status_unchanged, PushStatus};
 
     #[test]
     fn preferred_remote_prefers_origin_when_present() {
@@ -376,9 +395,42 @@ mod tests {
         assert_eq!(remote, None);
     }
 
+    #[test]
+    fn verify_push_status_unchanged_detects_outbound_snapshot_drift() {
+        let repo_root = make_temp_repo("git-push-status-drift");
+        initialize_repo(&repo_root);
+        configure_identity(&repo_root);
+        fs::write(repo_root.join("README.md"), "# Demo\n").expect("should write readme");
+        run_git(&repo_root, &["add", "."]);
+        run_git(&repo_root, &["commit", "-m", "initial"]);
+
+        let expected = PushStatus::Ready {
+            current_branch: "main".to_string(),
+            upstream_branch: None,
+            commits_ahead: 1,
+            candidate_files: vec![PathBuf::from("README.md")],
+        };
+        verify_push_status_unchanged(&repo_root, &expected)
+            .expect("initial push status should match");
+
+        fs::write(repo_root.join("CHANGELOG.md"), "release notes\n")
+            .expect("should write changelog");
+        run_git(&repo_root, &["add", "."]);
+        run_git(&repo_root, &["commit", "-m", "changelog"]);
+
+        let error = verify_push_status_unchanged(&repo_root, &expected)
+            .expect_err("drifted push status should fail");
+        assert!(error.to_string().contains("outbound push snapshot changed"));
+    }
+
     fn initialize_repo(repo_root: &Path) {
         fs::create_dir_all(repo_root).expect("should create repo root");
         run_git(repo_root, &["init", "-b", "main"]);
+    }
+
+    fn configure_identity(repo_root: &Path) {
+        run_git(repo_root, &["config", "user.name", "Wolfence Test"]);
+        run_git(repo_root, &["config", "user.email", "wolfence@example.com"]);
     }
 
     fn run_git(repo_root: &Path, args: &[&str]) {

@@ -1,0 +1,26 @@
+{
+  "prepare": "commit",
+  "expectations": {
+    "push": {
+      "verdict": "block",
+      "finding_ids": [
+        "secret.file.env"
+      ],
+      "json": {
+        "status": "ready",
+        "result": "blocked",
+        "has_report": true,
+        "has_decision": true,
+        "has_finding_history": true,
+        "has_finding_baseline": true
+      },
+      "audit": {
+        "entries": 1,
+        "healthy": true,
+        "outcomes": [
+          "blocked"
+        ]
+      }
+    }
+  }
+}

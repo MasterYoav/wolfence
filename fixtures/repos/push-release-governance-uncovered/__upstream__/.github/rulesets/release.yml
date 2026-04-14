@@ -1,0 +1,8 @@
+name: release
+target: branch
+enforcement: active
+
+rules:
+  - type: non_fast_forward
+    parameters:
+      enabled: true

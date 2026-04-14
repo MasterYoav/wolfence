@@ -26,6 +26,25 @@ This is the right fit because:
 - One binary is easier to trust, audit, version, sign, and distribute.
 - The core decision path should not depend on network reachability.
 
+The repository now also contains a native macOS app. That app is intentionally
+downstream of the Rust core: it observes local Wolfence state and structured
+command output, but it does not own enforcement.
+
+## Product Surfaces
+
+Wolfence currently ships with two local-first surfaces:
+
+- `wolf`: the authoritative CLI and protected Git execution path
+- `Wolfence.app`: a root-level SwiftUI operator console for multi-repository
+  monitoring
+
+This separation matters:
+
+- only the Rust binary may decide whether a push is allowed
+- the macOS app may read `.wolfence/*` state and call `wolf ... --json`
+- the macOS app must not fork the policy model or invent its own security
+  verdicts
+
 ## High-Level Flow
 
 ```text
@@ -38,6 +57,12 @@ CLI
   -> policy engine
   -> decision
   -> optional Git delegation
+
+macOS app
+  -> repository workspace selection
+  -> repo-local state adapters (.wolfence/*)
+  -> wolf JSON command adapters
+  -> native presentation layer
 ```
 
 ## Core Modules
@@ -52,6 +77,26 @@ layer. It should never own security logic.
 The command layer maps a parsed command such as `push` or `scan` into a use
 case. It prints human-readable operator output, but it should rely on the core
 domain modules for every real security judgment.
+
+### Native desktop console
+
+The root-level SwiftUI app is an operator console, not a second policy engine.
+Its responsibilities are:
+
+- select and persist repository workspaces
+- render push posture, doctor posture, policy posture, and audit evidence
+- render finding history so newly introduced risk is distinct from recurring known findings
+- render finding baseline posture so accepted starting state stays distinct from newly introduced risk
+- refresh structured state by calling `wolf doctor --json` and
+  `wolf scan push --json`
+- read repo-local files such as `.wolfence/config.toml`,
+  `.wolfence/policy/receipts.toml`, `.wolfence/history/baseline.json`, and `.wolfence/audit/decisions.jsonl`
+
+Its non-responsibilities are equally important:
+
+- no independent security verdict logic
+- no alternate policy rules
+- no bypass around the Rust protected path
 
 ### Git integration layer
 
@@ -143,10 +188,14 @@ introduced. Future services can enrich the product with:
 
 - dashboards
 - team policy management
-- central finding history
+- central aggregation of repo-local finding history
 - signed rule distribution
 - fleet analytics
 - IDE and GitHub integrations
 
 Those services should extend the product, not become a hard dependency of the
 local safety gate.
+
+The native macOS app follows the same rule. It is a high-value local surface,
+but it is still a consumer of the authoritative security engine rather than a
+replacement for it.

@@ -74,6 +74,22 @@ pub enum AuditCommand {
     Help,
 }
 
+/// Parsed finding-baseline workflows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BaselineCommand {
+    Capture { scope: BaselineScope },
+    Show,
+    Clear,
+    Help,
+}
+
+/// Scope used when capturing an accepted baseline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BaselineScope {
+    Push,
+    Staged,
+}
+
 /// Parsed scan-specific operator workflows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScanCommand {
@@ -91,6 +107,7 @@ pub enum Command {
     Scan(ScanCommand),
     Doctor { json: bool },
     Config,
+    Baseline(BaselineCommand),
     Receipt(ReceiptCommand),
     Trust(TrustCommand),
     Audit(AuditCommand),
@@ -125,6 +142,7 @@ impl Cli {
                 ensure_no_extra_args(args)?;
                 Command::Config
             }
+            Some("baseline") => Command::Baseline(parse_baseline_command(args)?),
             Some("receipt") => Command::Receipt(parse_receipt_command(args)?),
             Some("trust") => Command::Trust(parse_trust_command(args)?),
             Some("audit") => Command::Audit(parse_audit_command(args)?),
@@ -300,6 +318,48 @@ where
     Ok(subcommand)
 }
 
+fn parse_baseline_command<I>(mut args: I) -> Result<BaselineCommand, String>
+where
+    I: Iterator<Item = String>,
+{
+    let mut args = collect_args(&mut args);
+    let subcommand = match args.next().as_deref() {
+        Some("capture") => {
+            let scope = match args.next().as_deref() {
+                None => BaselineScope::Push,
+                Some("push") => BaselineScope::Push,
+                Some("staged") => BaselineScope::Staged,
+                Some(other) => {
+                    return Err(format!(
+                        "unknown baseline capture scope `{other}`. Expected `push` or `staged`."
+                    ))
+                }
+            };
+            ensure_no_extra_args(args)?;
+            BaselineCommand::Capture { scope }
+        }
+        Some("show") => {
+            ensure_no_extra_args(args)?;
+            BaselineCommand::Show
+        }
+        Some("clear") => {
+            ensure_no_extra_args(args)?;
+            BaselineCommand::Clear
+        }
+        None | Some("-h" | "--help" | "help") => {
+            ensure_no_extra_args(args)?;
+            BaselineCommand::Help
+        }
+        Some(other) => {
+            return Err(format!(
+                "unknown baseline command `{other}`. Run `wolf baseline help` to see the supported workflows."
+            ))
+        }
+    };
+
+    Ok(subcommand)
+}
+
 fn parse_scan_command<I>(mut args: I) -> Result<ScanCommand, String>
 where
     I: Iterator<Item = String>,
@@ -385,7 +445,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{AuditCommand, Cli, Command, ReceiptCommand, ScanCommand, TrustCommand};
+    use super::{
+        AuditCommand, BaselineCommand, BaselineScope, Cli, Command, ReceiptCommand, ScanCommand,
+        TrustCommand,
+    };
 
     #[test]
     fn defaults_to_help_when_no_arguments_are_provided() {
@@ -404,6 +467,44 @@ mod tests {
         let cli = Cli::parse(vec!["push".to_string(), "--json".to_string()].into_iter())
             .expect("parse should succeed");
         assert_eq!(cli.command, Command::Push { json: true });
+    }
+
+    #[test]
+    fn parses_baseline_capture_defaulting_to_push_scope() {
+        let cli = Cli::parse(vec!["baseline".to_string(), "capture".to_string()].into_iter())
+            .expect("parse should succeed");
+        assert_eq!(
+            cli.command,
+            Command::Baseline(BaselineCommand::Capture {
+                scope: BaselineScope::Push
+            })
+        );
+    }
+
+    #[test]
+    fn parses_baseline_capture_for_staged_scope() {
+        let cli = Cli::parse(
+            vec![
+                "baseline".to_string(),
+                "capture".to_string(),
+                "staged".to_string(),
+            ]
+            .into_iter(),
+        )
+        .expect("parse should succeed");
+        assert_eq!(
+            cli.command,
+            Command::Baseline(BaselineCommand::Capture {
+                scope: BaselineScope::Staged
+            })
+        );
+    }
+
+    #[test]
+    fn parses_baseline_show_command() {
+        let cli = Cli::parse(vec!["baseline".to_string(), "show".to_string()].into_iter())
+            .expect("parse should succeed");
+        assert_eq!(cli.command, Command::Baseline(BaselineCommand::Show));
     }
 
     #[test]

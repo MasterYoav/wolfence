@@ -1,0 +1,5 @@
+[policy]
+mode = "standard"
+
+[scan]
+ignore_paths = ["docs/"]

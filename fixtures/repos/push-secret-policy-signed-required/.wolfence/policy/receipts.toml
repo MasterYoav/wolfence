@@ -1,0 +1,2 @@
+[categories.secret]
+require_signed_receipts = true
