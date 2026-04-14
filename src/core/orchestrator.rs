@@ -14,11 +14,11 @@ use super::finding_baseline::FindingBaselineSummary;
 use super::finding_history::FindingHistorySummary;
 use super::findings::{Confidence, Finding, FindingCategory, Severity};
 use super::scanners::{
-    ArtifactScanner, BasicSastScanner, ConfigScanner, DependencyScanner, PolicyScanner, Scanner,
-    SecretScanner,
+    ArtifactScanner, BasicSastScanner, ConfigScanner, DependencyScanner, PolicyScanner,
+    Scanner, ScannerProgress as ScannerFileProgress, SecretScanner,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScanProgress {
     ScannerStarted {
         name: &'static str,
@@ -30,6 +30,12 @@ pub enum ScanProgress {
         index: usize,
         total: usize,
         findings: usize,
+    },
+    FileStarted {
+        scanner: &'static str,
+        file: std::path::PathBuf,
+        current: usize,
+        total: usize,
     },
 }
 
@@ -108,7 +114,19 @@ impl Orchestrator {
                 total,
             });
             let findings_before = findings.len();
-            findings.extend(scanner.scan(context)?);
+            findings.extend(scanner.scan_with_progress(context, &mut |event| match event {
+                ScannerFileProgress::FileStarted {
+                    scanner,
+                    file,
+                    current,
+                    total,
+                } => on_progress(ScanProgress::FileStarted {
+                    scanner,
+                    file,
+                    current,
+                    total,
+                }),
+            })?);
             on_progress(ScanProgress::ScannerFinished {
                 name: scanner.name(),
                 index,

@@ -10,6 +10,7 @@
 //! outbound branch content.
 
 use std::io::{self, IsTerminal, Write};
+use std::path::Path;
 use std::process::ExitCode;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -701,6 +702,7 @@ struct TtyPushUi {
 
 impl TtyPushUi {
     fn new() -> Self {
+        println!("Wolfence push");
         Self {
             spinner: Some(SpinnerHandle::start("Preparing outbound push snapshot")),
         }
@@ -746,6 +748,25 @@ impl TtyPushUi {
                     scanner_progress_label(name)
                 ));
             }
+            PushEvaluationProgress::FileStarted {
+                scanner,
+                file,
+                current,
+                total,
+            } => {
+                let message = format!(
+                    "{} ({}/{})  {}",
+                    scanner_progress_label(scanner),
+                    current,
+                    total,
+                    display_scan_file(&file)
+                );
+                if total <= 8 {
+                    self.echo_progress_line(message);
+                } else {
+                    spinner.update(message);
+                }
+            }
             PushEvaluationProgress::GovernanceCheck => {
                 spinner.update("Checking live repository governance");
             }
@@ -765,7 +786,6 @@ impl TtyPushUi {
         if let Some(mut spinner) = self.spinner.take() {
             spinner.stop();
         }
-        println!("Wolfence push");
         println!("  {message}");
     }
 
@@ -782,7 +802,6 @@ impl TtyPushUi {
             spinner.stop();
         }
 
-        println!("Wolfence push");
         println!(
             "  branch: {} -> {}",
             current_branch,
@@ -844,6 +863,14 @@ impl TtyPushUi {
         }
         println!("  result: {message}");
     }
+
+    fn echo_progress_line(&mut self, message: String) {
+        if let Some(mut spinner) = self.spinner.take() {
+            spinner.stop();
+        }
+        println!("  {message}");
+        self.spinner = Some(SpinnerHandle::start(message));
+    }
 }
 
 fn scanner_progress_label(name: &str) -> &'static str {
@@ -856,6 +883,17 @@ fn scanner_progress_label(name: &str) -> &'static str {
         "policy-scanner" => "Checking Wolfence policy integrity",
         _ => "Running scanner",
     }
+}
+
+fn display_scan_file(path: &Path) -> String {
+    let text = path.display().to_string();
+    const MAX_LEN: usize = 56;
+    if text.len() <= MAX_LEN {
+        return text;
+    }
+
+    let suffix_len = MAX_LEN.saturating_sub(3);
+    format!("...{}", &text[text.len() - suffix_len..])
 }
 
 #[cfg(test)]

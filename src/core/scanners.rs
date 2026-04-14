@@ -32,12 +32,33 @@ use super::trust::TRUST_DIR_RELATIVE_PATH;
 const MAX_TEXT_SCAN_BYTES: u64 = 512 * 1024;
 const MAX_ARCHIVE_INSPECTION_BYTES: u64 = 8 * 1024 * 1024;
 
+#[derive(Debug, Clone)]
+pub enum ScannerProgress {
+    FileStarted {
+        scanner: &'static str,
+        file: PathBuf,
+        current: usize,
+        total: usize,
+    },
+}
+
 /// Shared behavior every scanner must provide.
 pub trait Scanner {
     /// Stable scanner identifier for logs, policy, and finding attribution.
     fn name(&self) -> &'static str;
     /// Runs the scanner against the current execution context.
-    fn scan(&self, context: &ExecutionContext) -> AppResult<Vec<Finding>>;
+    #[allow(dead_code)]
+    fn scan(&self, context: &ExecutionContext) -> AppResult<Vec<Finding>> {
+        self.scan_with_progress(context, &mut |_| {})
+    }
+
+    /// Runs the scanner against the current execution context with optional
+    /// per-file progress reporting.
+    fn scan_with_progress(
+        &self,
+        context: &ExecutionContext,
+        on_progress: &mut dyn FnMut(ScannerProgress),
+    ) -> AppResult<Vec<Finding>>;
 }
 
 /// Secret detection using layered file and content heuristics.
@@ -63,11 +84,22 @@ impl Scanner for SecretScanner {
         "secret-scanner"
     }
 
-    fn scan(&self, context: &ExecutionContext) -> AppResult<Vec<Finding>> {
+    fn scan_with_progress(
+        &self,
+        context: &ExecutionContext,
+        on_progress: &mut dyn FnMut(ScannerProgress),
+    ) -> AppResult<Vec<Finding>> {
         let mut findings = Vec::new();
         let mut seen = HashSet::new();
+        let total_files = context.candidate_files.len();
 
-        for file in &context.candidate_files {
+        for (index, file) in context.candidate_files.iter().enumerate() {
+            on_progress(ScannerProgress::FileStarted {
+                scanner: self.name(),
+                file: file.clone(),
+                current: index + 1,
+                total: total_files,
+            });
             let full_path = context.repo_root.join(file);
 
             if let Some(finding) = classify_sensitive_path(self.name(), file) {
@@ -157,10 +189,21 @@ impl Scanner for BasicSastScanner {
         "basic-sast"
     }
 
-    fn scan(&self, context: &ExecutionContext) -> AppResult<Vec<Finding>> {
+    fn scan_with_progress(
+        &self,
+        context: &ExecutionContext,
+        on_progress: &mut dyn FnMut(ScannerProgress),
+    ) -> AppResult<Vec<Finding>> {
         let mut findings = Vec::new();
+        let total_files = context.candidate_files.len();
 
-        for file in &context.candidate_files {
+        for (index, file) in context.candidate_files.iter().enumerate() {
+            on_progress(ScannerProgress::FileStarted {
+                scanner: self.name(),
+                file: file.clone(),
+                current: index + 1,
+                total: total_files,
+            });
             let full_path = context.repo_root.join(file);
 
             let Some(contents) = read_text_file(&full_path)? else {
@@ -289,11 +332,22 @@ impl Scanner for ArtifactScanner {
         "artifact-scanner"
     }
 
-    fn scan(&self, context: &ExecutionContext) -> AppResult<Vec<Finding>> {
+    fn scan_with_progress(
+        &self,
+        context: &ExecutionContext,
+        on_progress: &mut dyn FnMut(ScannerProgress),
+    ) -> AppResult<Vec<Finding>> {
         let mut findings = Vec::new();
         let mut seen = HashSet::new();
+        let total_files = context.candidate_files.len();
 
-        for file in &context.candidate_files {
+        for (index, file) in context.candidate_files.iter().enumerate() {
+            on_progress(ScannerProgress::FileStarted {
+                scanner: self.name(),
+                file: file.clone(),
+                current: index + 1,
+                total: total_files,
+            });
             let full_path = context.repo_root.join(file);
             let Some(metadata) = read_file_metadata(&full_path)? else {
                 continue;
@@ -368,15 +422,26 @@ impl Scanner for DependencyScanner {
         "dependency-scanner"
     }
 
-    fn scan(&self, context: &ExecutionContext) -> AppResult<Vec<Finding>> {
+    fn scan_with_progress(
+        &self,
+        context: &ExecutionContext,
+        on_progress: &mut dyn FnMut(ScannerProgress),
+    ) -> AppResult<Vec<Finding>> {
         let mut findings = dependency_relationship_findings(self.name(), context)?;
         let mut seen = findings
             .iter()
             .map(|finding| finding.fingerprint.clone())
             .collect::<HashSet<_>>();
         let mut resolved_dependencies = Vec::new();
+        let total_files = context.candidate_files.len();
 
-        for file in &context.candidate_files {
+        for (index, file) in context.candidate_files.iter().enumerate() {
+            on_progress(ScannerProgress::FileStarted {
+                scanner: self.name(),
+                file: file.clone(),
+                current: index + 1,
+                total: total_files,
+            });
             let full_path = context.repo_root.join(file);
             let Some(contents) = read_text_file(&full_path)? else {
                 continue;
@@ -550,10 +615,21 @@ impl Scanner for ConfigScanner {
         "config-scanner"
     }
 
-    fn scan(&self, context: &ExecutionContext) -> AppResult<Vec<Finding>> {
+    fn scan_with_progress(
+        &self,
+        context: &ExecutionContext,
+        on_progress: &mut dyn FnMut(ScannerProgress),
+    ) -> AppResult<Vec<Finding>> {
         let mut findings = Vec::new();
+        let total_files = context.candidate_files.len();
 
-        for file in &context.candidate_files {
+        for (index, file) in context.candidate_files.iter().enumerate() {
+            on_progress(ScannerProgress::FileStarted {
+                scanner: self.name(),
+                file: file.clone(),
+                current: index + 1,
+                total: total_files,
+            });
             let full_path = context.repo_root.join(file);
             let file_name = file
                 .file_name()
@@ -5093,7 +5169,11 @@ impl Scanner for PolicyScanner {
         "policy-scanner"
     }
 
-    fn scan(&self, context: &ExecutionContext) -> AppResult<Vec<Finding>> {
+    fn scan_with_progress(
+        &self,
+        context: &ExecutionContext,
+        on_progress: &mut dyn FnMut(ScannerProgress),
+    ) -> AppResult<Vec<Finding>> {
         let mut findings = Vec::new();
         let mut seen = HashSet::new();
         let config_path = context.repo_root.join(".wolfence/config.toml");
@@ -5117,7 +5197,14 @@ impl Scanner for PolicyScanner {
             );
         }
 
-        for file in &context.candidate_files {
+        let total_files = context.candidate_files.len();
+        for (index, file) in context.candidate_files.iter().enumerate() {
+            on_progress(ScannerProgress::FileStarted {
+                scanner: self.name(),
+                file: file.clone(),
+                current: index + 1,
+                total: total_files,
+            });
             let full_path = context.repo_root.join(file);
             let Some(contents) = read_text_file(&full_path)? else {
                 continue;

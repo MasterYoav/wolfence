@@ -58,6 +58,12 @@ pub enum PushEvaluationProgress {
         total: usize,
         findings: usize,
     },
+    FileStarted {
+        scanner: &'static str,
+        file: std::path::PathBuf,
+        current: usize,
+        total: usize,
+    },
     GovernanceCheck,
     FindingHistory,
     FindingBaseline,
@@ -114,6 +120,19 @@ where
                             index,
                             total,
                             findings,
+                        });
+                    }
+                    ScanProgress::FileStarted {
+                        scanner,
+                        file,
+                        current,
+                        total,
+                    } => {
+                        on_progress(PushEvaluationProgress::FileStarted {
+                            scanner,
+                            file,
+                            current,
+                            total,
                         });
                     }
                 }
