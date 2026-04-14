@@ -4228,19 +4228,37 @@ fn scan_wolfence_policy_surface(
     let mut findings = Vec::new();
     let path_text = file.to_string_lossy().replace('\\', "/");
     let is_scanner_bundle_surface = wolfence_scanner_bundle_surface(&path_text);
+    let rule_provenance_changed = any_changed_path_matches(
+        context.candidate_files.as_slice(),
+        wolfence_rule_provenance_surface,
+    );
 
     if is_scanner_bundle_surface {
+        let (severity, detail) = if rule_provenance_changed {
+            (
+                Severity::Low,
+                format!(
+                    "The outbound change set modifies `{path_text}`, which is part of Wolfence's own local detection, policy, or hook-enforcement bundle. Declared rule provenance surfaces changed alongside it, so the engine change remains review-significant but its shipped behavior is being documented in the same push."
+                ),
+            )
+        } else {
+            (
+                Severity::Medium,
+                format!(
+                    "The outbound change set modifies `{path_text}`, which is part of Wolfence's own local detection, policy, or hook-enforcement bundle. Changes to the scanner bundle alter the gate itself, not just the repository being reviewed."
+                ),
+            )
+        };
+
         findings.push(Finding::new(
             "policy.wolfence.scanner-bundle-changed",
             scanner,
-            Severity::Medium,
+            severity,
             Confidence::High,
             FindingCategory::Policy,
             Some(file.to_path_buf()),
             "Wolfence scanner bundle surface changed",
-            format!(
-                "The outbound change set modifies `{path_text}`, which is part of Wolfence's own local detection, policy, or hook-enforcement bundle. Changes to the scanner bundle alter the gate itself, not just the repository being reviewed."
-            ),
+            detail,
             "Review scanner-bundle changes with the same care as trust, receipt, or release-policy changes. Confirm the engine change is intentional and governed.",
             format!("policy-scanner-bundle-changed:{path_text}"),
         ));
@@ -4253,10 +4271,7 @@ fn scan_wolfence_policy_surface(
         )
         .map(PathBuf::as_path)
             == Some(file)
-        && !any_changed_path_matches(
-            context.candidate_files.as_slice(),
-            wolfence_rule_provenance_surface,
-        )
+        && !rule_provenance_changed
     {
         findings.push(Finding::new(
             "policy.wolfence.rule-provenance-missing",
@@ -13494,6 +13509,32 @@ mod tests {
                 .iter()
                 .all(|finding| finding.id != "policy.wolfence.rule-provenance-missing"),
             "expected no rule-provenance-missing finding, got: {findings:#?}"
+        );
+        fs::remove_dir_all(root).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
+    fn downgrades_scanner_bundle_change_when_rule_provenance_changes_with_it() {
+        let (context, root) = test_context(&[
+            ("src/core/scanners.rs", "pub struct SecretScanner;\n"),
+            ("docs/security/scanner-inventory.md", "# inventory\n"),
+        ]);
+
+        let findings = PolicyScanner.scan(&context).expect("scan should succeed");
+        let bundle_findings = findings
+            .iter()
+            .filter(|finding| finding.id == "policy.wolfence.scanner-bundle-changed")
+            .collect::<Vec<_>>();
+
+        assert!(
+            !bundle_findings.is_empty(),
+            "expected scanner-bundle finding, got: {findings:#?}"
+        );
+        assert!(
+            bundle_findings
+                .iter()
+                .all(|finding| finding.severity == Severity::Low),
+            "expected scanner-bundle finding severity to downgrade when provenance changes too, got: {bundle_findings:#?}"
         );
         fs::remove_dir_all(root).expect("temp directory cleanup should succeed");
     }

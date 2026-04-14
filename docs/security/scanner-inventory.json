@@ -205,6 +205,7 @@
       "state": "partial",
       "current_coverage": [
         "scanner-bundle surface change detection",
+        "downgraded review-only scanner-bundle signals when local rule provenance changes in the same push",
         "scanner-bundle changes without local rule-provenance updates",
         "repo-local config change detection",
         "advisory-mode downgrade detection",

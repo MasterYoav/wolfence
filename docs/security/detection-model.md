@@ -416,6 +416,9 @@ Current examples include:
 
 - changes to Wolfence's own scanner-bundle surfaces such as local detector,
   finding, trust, receipt, hook, or protected-push engine paths
+- documented scanner-bundle changes remain review-significant but downgrade to
+  lower-severity review signals when declared rule provenance surfaces change in
+  the same push
 - scanner-bundle changes that do not also update declared local rule provenance
   surfaces such as `scanner-inventory.*` or the detection model
 - `.wolfence/config.toml` changes in general as review-significant policy edits
