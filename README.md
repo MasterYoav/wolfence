@@ -26,7 +26,7 @@ misconfigurations often slip into repositories unnoticed.
 
 > Wolfence stands between your code and the world --- and decides if
 > it's safe to pass.
-> It does not try to replace your whole Git workflow.
+> It does not try to replace your whole Git workflow..
 
 You write code normally.\
 You commit normally.\
