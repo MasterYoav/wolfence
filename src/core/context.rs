@@ -5,7 +5,7 @@
 //! product deterministic and easier to test.
 
 use std::fmt::{self, Display, Formatter};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
@@ -58,6 +58,11 @@ impl ExecutionContext {
     /// Loads repository metadata from Git and packages it for downstream use.
     pub fn load(action: ProtectedAction) -> AppResult<Self> {
         let repo_root = git::discover_repo_root()?;
+        Self::load_for_repo(&repo_root, action)
+    }
+
+    /// Loads repository metadata for one explicit repository root.
+    pub fn load_for_repo(repo_root: &Path, action: ProtectedAction) -> AppResult<Self> {
         let config = ResolvedConfig::load_for_repo(&repo_root)?;
         let receipts = ReceiptIndex::load_for_repo(&repo_root)?;
         let (discovered_candidate_files, candidate_files, ignored_candidate_files, push_status) =
@@ -101,7 +106,7 @@ impl ExecutionContext {
 
         Ok(Self {
             action,
-            repo_root,
+            repo_root: repo_root.to_path_buf(),
             discovered_candidate_files,
             candidate_files,
             ignored_candidate_files,

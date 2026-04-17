@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser-scope:
+    runs-on: ubuntu-latest
+    outputs:
+      browser_relevant: ${{ steps.filter.outputs.browser_relevant }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Detect browser-console and bridge changes
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            browser_relevant:
+              - 'apps/web-console/**'
+              - 'src/commands/ui.rs'
+              - 'src/commands/protected.rs'
+              - 'src/core/context.rs'
+              - 'src/core/git.rs'
+              - 'src/commands/doctor.rs'
+              - 'src/commands/mod.rs'
+              - 'src/cli.rs'
+              - '.github/workflows/ci.yml'
+              - '.github/actions/setup-web-console/**'
+
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up shared web console CI prerequisites
+        uses: ./.github/actions/setup-web-console
+
+      - name: Check Rust workspace
+        run: cargo check
+
+      - name: Verify browser console surface
+        run: cargo run -- ui verify
+
+  verify-browser:
+    needs: browser-scope
+    if: needs.browser-scope.outputs.browser_relevant == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up shared web console CI prerequisites
+        uses: ./.github/actions/setup-web-console
+        with:
+          install-browser: "true"
+
+      - name: Verify browser console in a real browser
+        env:
+          WOLFENCE_UI_VERIFY_ARTIFACT_DIR: .artifacts/verify-browser/
+        run: cargo run -- ui verify-browser
+
+      - name: Upload browser verification artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-verify-browser-artifacts
+          path: apps/web-console/.artifacts/verify-browser/
+          if-no-files-found: ignore
+
+  ci-summary:
+    needs:
+      - browser-scope
+      - verify
+      - verify-browser
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish CI summary
+        shell: bash
+        run: |
+          {
+            echo "## Wolfence CI Summary"
+            echo
+            echo "- smoke verification: ${{ needs.verify.result }}"
+            echo "- browser-relevant changes: ${{ needs.browser-scope.outputs.browser_relevant }}"
+            echo "- browser verification: ${{ needs.verify-browser.result }}"
+            echo
+            if [ "${{ needs.browser-scope.outputs.browser_relevant }}" = "true" ]; then
+              echo "The browser-backed UI job ran because browser-console or local bridge files changed."
+            else
+              echo "The browser-backed UI job was skipped because no browser-console or local bridge files changed."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

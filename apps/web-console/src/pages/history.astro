@@ -1,0 +1,679 @@
+---
+import ConsoleLayout from "../layouts/ConsoleLayout.astro";
+---
+
+<ConsoleLayout
+  title="Wolfence Repo History"
+  description="Dedicated audit history view for a pinned Wolfence repository."
+>
+  <div class="console-shell">
+    <aside class="rail">
+      <div class="rail-brand">
+        <div class="rail-mark">WO</div>
+        <div>
+          <h1>Wolfence</h1>
+          <p>Repo history</p>
+        </div>
+      </div>
+
+      <p class="rail-section-label">Pinned repositories</p>
+      <div class="repo-list" id="history-workspace-list">
+        <article class="repo-item is-active">
+          <header>
+            <strong>Loading</strong>
+            <span class="repo-tone review"></span>
+          </header>
+          <p>Preparing pinned repo history</p>
+          <small>Fetching the local browser bridge.</small>
+        </article>
+      </div>
+
+      <div style="margin-top: 18px; display:grid; gap:10px;">
+        <a class="button secondary" href="/">Back to console</a>
+      </div>
+    </aside>
+
+    <main class="main">
+      <section class="hero">
+        <div>
+          <p class="panel-kicker">Repo History</p>
+          <h2 id="history-title">Full local audit timeline.</h2>
+          <p id="history-copy">
+            Review one pinned repository’s recorded push behavior over time,
+            filtered through the same local Wolfence bridge that powers the
+            console.
+          </p>
+          <div class="hero-actions">
+            <div id="history-window-controls" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
+            <button class="button secondary" id="history-export-md" type="button">Export Markdown</button>
+            <button class="button secondary" id="history-export-json" type="button">Export JSON</button>
+          </div>
+        </div>
+
+        <aside class="hero-side">
+          <dl>
+            <div>
+              <dt>Selected repository</dt>
+              <dd id="history-repo-path">Loading…</dd>
+            </div>
+            <div>
+              <dt>Branch posture</dt>
+              <dd id="history-branch-line">Loading…</dd>
+            </div>
+            <div>
+              <dt>Bridge source</dt>
+              <dd>Audit history comes from <code>wolf audit list --json</code> through the local browser bridge.</dd>
+            </div>
+            <div>
+              <dt>Verification posture</dt>
+              <dd id="history-verification-line">Loading…</dd>
+            </div>
+          </dl>
+        </aside>
+      </section>
+
+      <section class="status-banner is-info" id="history-status" hidden>
+        <strong id="history-status-title">History bridge ready</strong>
+        <small id="history-status-detail">Repo selection and history refresh states will appear here.</small>
+      </section>
+
+      <section class="summary-row">
+        <div class="summary-tile">
+          <span>Entries in window</span>
+          <strong id="history-summary-entries">0</strong>
+        </div>
+        <div class="summary-tile">
+          <span>Clean pushes</span>
+          <strong id="history-summary-clean">0</strong>
+        </div>
+        <div class="summary-tile">
+          <span>Review / blocked</span>
+          <strong id="history-summary-risk">0 / 0</strong>
+        </div>
+        <div class="summary-tile">
+          <span>Latest outcome</span>
+          <strong id="history-summary-latest">Idle</strong>
+        </div>
+      </section>
+
+      <section class="grid">
+        <div class="stack">
+          <section class="panel">
+            <header>
+              <div>
+                <p class="panel-kicker">Timeline</p>
+                <h3>Recorded audit history</h3>
+              </div>
+              <span class="panel-subtle" id="history-timeline-status">all</span>
+            </header>
+            <div class="dense-list" id="history-timeline">
+              <article class="audit-item">
+                <div class="audit-line">
+                  <strong>Waiting for history</strong>
+                  <span class="detail-muted">idle</span>
+                </div>
+                <span class="detail-muted">The timeline will appear once the selected repo has been resolved.</span>
+              </article>
+            </div>
+          </section>
+        </div>
+
+        <div class="stack">
+          <section class="panel">
+            <header>
+              <div>
+                <p class="panel-kicker">Distribution</p>
+                <h3>Window breakdown</h3>
+              </div>
+            </header>
+            <div class="dense-list" id="history-distribution">
+              <article class="audit-item">
+                <div class="audit-line">
+                  <strong>Waiting for history</strong>
+                  <span class="detail-muted">idle</span>
+                </div>
+                <span class="detail-muted">Select a pinned repo to see clean, review, blocked, and idle counts.</span>
+              </article>
+            </div>
+          </section>
+
+          <section class="panel">
+            <header>
+              <div>
+                <p class="panel-kicker">Current posture</p>
+                <h3>Live repo context</h3>
+              </div>
+            </header>
+            <div class="dense-list" id="history-live-context">
+              <article class="audit-item">
+                <div class="audit-line">
+                  <strong>Waiting for repo context</strong>
+                  <span class="detail-muted">idle</span>
+                </div>
+                <span class="detail-muted">Current push-preview and doctor summaries will appear here.</span>
+              </article>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script is:inline>
+    const HISTORY_WINDOWS = {
+      "24h": 24 * 60 * 60,
+      "7d": 7 * 24 * 60 * 60,
+      "30d": 30 * 24 * 60 * 60,
+      all: null
+    };
+
+    const classifyAuditEntry = (entry) => {
+      if (!entry) return "idle";
+      if ((entry.blocks ?? 0) > 0 || entry.outcome === "blocked") return "blocked";
+      if (entry.outcome === "push-failed") return "failed";
+      if ((entry.warnings ?? 0) > 0 || entry.verdict === "warn") return "review";
+      if (entry.outcome === "no-op") return "idle";
+      return "success";
+    };
+
+    const formatAuditTime = (unix) => {
+      if (!unix) return "n/a";
+      const seconds = Math.max(0, Math.floor(Date.now() / 1000) - unix);
+      if (seconds < 60) return `${seconds}s ago`;
+      if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+      if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+      return `${Math.floor(seconds / 86400)}d ago`;
+    };
+
+    const formatVerificationTime = (unix) => {
+      if (!unix) return "never";
+      const seconds = Math.max(0, Math.floor(Date.now() / 1000) - unix);
+      if (seconds < 60) return `${seconds}s ago`;
+      if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+      if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+      return `${Math.floor(seconds / 86400)}d ago`;
+    };
+
+    const encodeRepositoryId = (path) => encodeURIComponent(path);
+    const params = new URLSearchParams(window.location.search);
+    const requestedRepo = params.get("repo");
+    let historyWindow = "30d";
+    let selectedPath = null;
+    let latestPayload = null;
+
+    const filterAuditEntriesByWindow = (entries) => {
+      const seconds = HISTORY_WINDOWS[historyWindow];
+      if (seconds == null) return [...entries];
+      const cutoff = Math.floor(Date.now() / 1000) - seconds;
+      return entries.filter((entry) => (entry.timestamp_unix ?? 0) >= cutoff);
+    };
+
+    const loadConsole = async () => {
+      const response = await fetch("/api/console");
+      return response.json();
+    };
+
+    const loadRepositoryState = async (path, activePath) => {
+      const identifier = path === activePath ? "current" : encodeRepositoryId(path);
+      const [doctorResponse, pushPreviewResponse, auditResponse] = await Promise.all([
+        fetch(`/api/repositories/${identifier}/doctor`),
+        fetch(`/api/repositories/${identifier}/push-preview`),
+        fetch(`/api/repositories/${identifier}/audit`)
+      ]);
+
+      const [doctor, pushPreview, audit] = await Promise.all([
+        doctorResponse.json(),
+        pushPreviewResponse.json(),
+        auditResponse.json()
+      ]);
+
+      return { doctor, push_preview: pushPreview, audit };
+    };
+
+    const renderVerificationLine = (bridge) => {
+      const line = document.getElementById("history-verification-line");
+      if (!line) return;
+
+      const browser = bridge?.verification?.browser;
+      const surface = bridge?.verification?.surface;
+      const active = browser ?? surface;
+
+      if (!active) {
+        line.textContent = "No persisted verification result yet.";
+        return;
+      }
+
+      line.textContent = `${active.command} • ${active.ok ? "pass" : "review"} • ${formatVerificationTime(active.checked_at_unix)}`;
+    };
+
+    const safeFileSegment = (value) =>
+      String(value ?? "repo")
+        .trim()
+        .replace(/[^a-z0-9._-]+/gi, "-")
+        .replace(/^-+|-+$/g, "")
+        .toLowerCase() || "repo";
+
+    const downloadArtifact = (filename, body, mimeType) => {
+      const blob = new Blob([body], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    };
+
+    const serializeAuditEntry = (entry) => ({
+      sequence: entry.sequence ?? null,
+      outcome: entry.outcome ?? "unknown",
+      state: classifyAuditEntry(entry),
+      blocks: entry.blocks ?? 0,
+      warnings: entry.warnings ?? 0,
+      findings: entry.findings ?? 0,
+      verdict: entry.verdict ?? "unknown",
+      timestamp_unix: entry.timestamp_unix ?? null,
+      relative_time: formatAuditTime(entry.timestamp_unix),
+      detail: entry.detail ?? ""
+    });
+
+    const setButtonBusy = (button, busy) => {
+      if (!button) return;
+      if (busy) {
+        button.setAttribute("data-busy", "true");
+        button.setAttribute("disabled", "disabled");
+      } else {
+        button.removeAttribute("data-busy");
+        button.removeAttribute("disabled");
+      }
+    };
+
+    const setHistoryStatus = (tone, title, detail) => {
+      const banner = document.getElementById("history-status");
+      const titleElement = document.getElementById("history-status-title");
+      const detailElement = document.getElementById("history-status-detail");
+      if (!banner || !titleElement || !detailElement) return;
+      banner.hidden = false;
+      banner.className = `status-banner is-${tone}`;
+      titleElement.textContent = title;
+      detailElement.textContent = detail;
+    };
+
+    const renderWindowControls = () => {
+      const controls = document.getElementById("history-window-controls");
+      if (!controls) return;
+      controls.innerHTML = Object.keys(HISTORY_WINDOWS)
+        .map(
+          (windowKey) => `
+            <button
+              class="button secondary history-window"
+              type="button"
+              data-history-window="${windowKey}"
+              style="min-height:34px;padding:0 12px;font-size:.8rem;${historyWindow === windowKey ? "border-color:rgba(120,3,255,.28);background:rgba(120,3,255,.08);" : ""}"
+            >
+              ${windowKey}
+            </button>
+          `
+        )
+        .join("");
+
+      for (const item of controls.querySelectorAll(".history-window")) {
+        item.addEventListener("click", () => {
+          const nextWindow = item.getAttribute("data-history-window");
+          if (!nextWindow || nextWindow === historyWindow) return;
+          historyWindow = nextWindow;
+          renderWindowControls();
+          renderHistoryView();
+          setHistoryStatus("success", "History window updated", `Showing ${historyWindow} of audit evidence for the selected repo.`);
+        });
+      }
+    };
+
+    const renderWorkspaceList = (workspaces, activePath) => {
+      const list = document.getElementById("history-workspace-list");
+      if (!list) return;
+
+      list.innerHTML = workspaces
+        .map((workspace) => {
+          const isSelected = workspace.path === selectedPath;
+          return `
+            <article class="repo-item ${isSelected ? "is-active" : ""}">
+              <header>
+                <strong>${workspace.name}</strong>
+                <span class="repo-tone ${workspace.tone}"></span>
+              </header>
+              <p>${workspace.verdict_label}</p>
+              <small>${workspace.summary}</small>
+              <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+                <button class="button secondary history-select" type="button" data-workspace-path="${workspace.path}" style="min-height:34px;padding:0 12px;font-size:.8rem;">${isSelected ? "Selected" : "Open"}</button>
+                <a class="button secondary" href="/?repo=${encodeRepositoryId(workspace.path)}" style="min-height:34px;padding:0 12px;font-size:.8rem;">Console</a>
+              </div>
+            </article>
+          `;
+        })
+        .join("");
+
+      for (const item of list.querySelectorAll(".history-select")) {
+        item.addEventListener("click", async () => {
+          const path = item.getAttribute("data-workspace-path");
+          if (!path || path === selectedPath) return;
+          selectedPath = path;
+          setButtonBusy(item, true);
+          setHistoryStatus("working", "Loading repository history", path);
+          try {
+            await refreshHistoryView();
+            setHistoryStatus("success", "Repository history loaded", path);
+          } catch (error) {
+            setHistoryStatus("error", "Failed to load repository history", error?.message ?? "The local bridge did not return history data.");
+          } finally {
+            setButtonBusy(item, false);
+          }
+        });
+      }
+    };
+
+    const renderHero = (workspace, pushPreview) => {
+      const title = document.getElementById("history-title");
+      const repoPath = document.getElementById("history-repo-path");
+      const branchLine = document.getElementById("history-branch-line");
+      const copy = document.getElementById("history-copy");
+      if (!workspace) return;
+
+      if (title) {
+        title.textContent = `${workspace.name} audit history.`;
+      }
+      if (repoPath) {
+        repoPath.textContent = workspace.path;
+      }
+      if (branchLine) {
+        branchLine.textContent = `${workspace.branch ?? pushPreview?.branch ?? "unknown"} → ${workspace.upstream ?? pushPreview?.upstream ?? "<none>"}`;
+      }
+      if (copy) {
+        copy.innerHTML = `This view focuses on <code>${workspace.name}</code>, showing the filtered audit timeline alongside the repo’s current push and doctor posture.`;
+      }
+    };
+
+    const renderSummary = (entries) => {
+      const counts = entries.reduce(
+        (accumulator, entry) => {
+          const state = classifyAuditEntry(entry);
+          accumulator[state] = (accumulator[state] ?? 0) + 1;
+          return accumulator;
+        },
+        { success: 0, review: 0, blocked: 0, failed: 0, idle: 0 }
+      );
+      const latest = [...entries].slice(-1)[0];
+
+      const set = (id, value) => {
+        const element = document.getElementById(id);
+        if (element) element.textContent = value;
+      };
+
+      set("history-summary-entries", String(entries.length));
+      set("history-summary-clean", String(counts.success));
+      set("history-summary-risk", `${counts.review} / ${counts.blocked + counts.failed}`);
+      set("history-summary-latest", latest ? latest.outcome : "Idle");
+    };
+
+    const renderDistribution = (entries) => {
+      const container = document.getElementById("history-distribution");
+      if (!container) return;
+      const counts = entries.reduce(
+        (accumulator, entry) => {
+          const state = classifyAuditEntry(entry);
+          accumulator[state] = (accumulator[state] ?? 0) + 1;
+          return accumulator;
+        },
+        { success: 0, review: 0, blocked: 0, failed: 0, idle: 0 }
+      );
+
+      container.innerHTML = `
+        <article class="audit-item">
+          <div class="audit-line">
+            <strong>Window</strong>
+            <span class="detail-muted">${historyWindow}</span>
+          </div>
+          <span class="detail-muted">${entries.length} audit entries in the current history slice.</span>
+        </article>
+        <article class="audit-item">
+          <div class="audit-line">
+            <strong>Clean / review</strong>
+            <span class="detail-muted">${counts.success} / ${counts.review}</span>
+          </div>
+          <span class="detail-muted">Successful entries versus warn-level review entries.</span>
+        </article>
+        <article class="audit-item">
+          <div class="audit-line">
+            <strong>Blocked / failed</strong>
+            <span class="detail-muted">${counts.blocked} / ${counts.failed}</span>
+          </div>
+          <span class="detail-muted">Policy-blocked entries versus transport/runtime failures.</span>
+        </article>
+        <article class="audit-item">
+          <div class="audit-line">
+            <strong>Idle</strong>
+            <span class="detail-muted">${counts.idle}</span>
+          </div>
+          <span class="detail-muted">No-op or up-to-date entries in the selected window.</span>
+        </article>
+      `;
+    };
+
+    const renderLiveContext = (workspace, doctor, pushPreview) => {
+      const container = document.getElementById("history-live-context");
+      if (!container || !workspace) return;
+      const doctorSummary = doctor?.summary ?? {};
+      const blocks = pushPreview?.decision?.blocking_findings?.length ?? 0;
+      const warnings = pushPreview?.decision?.warning_findings?.length ?? 0;
+
+      container.innerHTML = `
+        <article class="audit-item">
+          <div class="audit-line">
+            <strong>Current verdict</strong>
+            <span class="detail-muted">${workspace.verdict_label}</span>
+          </div>
+          <span class="detail-muted">${workspace.summary}</span>
+        </article>
+        <article class="audit-item">
+          <div class="audit-line">
+            <strong>Live push posture</strong>
+            <span class="detail-muted">${blocks} blockers • ${warnings} warnings</span>
+          </div>
+          <span class="detail-muted">${pushPreview?.commits_ahead ?? 0} commits ahead • ${pushPreview?.report?.scanned_files ?? 0} files in scope</span>
+        </article>
+        <article class="audit-item">
+          <div class="audit-line">
+            <strong>Doctor posture</strong>
+            <span class="detail-muted">${doctorSummary.pass ?? 0} pass • ${(doctorSummary.warn ?? 0) + (doctorSummary.fail ?? 0)} review</span>
+          </div>
+          <span class="detail-muted">${workspace.doctor_summary}</span>
+        </article>
+      `;
+    };
+
+    const renderTimeline = (entries) => {
+      const container = document.getElementById("history-timeline");
+      const status = document.getElementById("history-timeline-status");
+      if (!container || !status) return;
+
+      status.textContent = historyWindow;
+      if (entries.length === 0) {
+        container.innerHTML = `
+          <article class="audit-item">
+            <div class="audit-line">
+              <strong>No audit entries</strong>
+              <span class="detail-muted">${historyWindow}</span>
+            </div>
+            <span class="detail-muted">This repo has no audit history in the selected window.</span>
+          </article>
+        `;
+        return;
+      }
+
+      container.innerHTML = [...entries]
+        .reverse()
+        .map(
+          (entry) => `
+            <article class="audit-item">
+              <div class="audit-line">
+                <strong>#${entry.sequence}</strong>
+                <span class="detail-muted">${classifyAuditEntry(entry)} • ${formatAuditTime(entry.timestamp_unix)}</span>
+              </div>
+              <span class="detail-muted">${entry.outcome} • ${entry.blocks ?? 0} blocks • ${entry.warnings ?? 0} warnings • ${entry.findings ?? 0} findings</span>
+              <span class="detail-muted">${entry.detail ?? "No extra detail recorded for this audit entry."}</span>
+            </article>
+          `
+        )
+        .join("");
+    };
+
+    const historyExportPayload = () => {
+      if (!latestPayload) return null;
+      const workspace = latestPayload.workspaces.find((entry) => entry.path === selectedPath);
+      if (!workspace) return null;
+      const filteredAudit = filterAuditEntriesByWindow(latestPayload.audit?.entries ?? []);
+      const doctorSummary = latestPayload.doctor?.summary ?? {};
+      return {
+        generated_at: new Date().toISOString(),
+        history_window: historyWindow,
+        repository: {
+          name: workspace.name,
+          path: workspace.path,
+          branch: workspace.branch ?? latestPayload.push_preview?.branch ?? "unknown",
+          upstream: workspace.upstream ?? latestPayload.push_preview?.upstream ?? "<none>",
+          verdict_label: workspace.verdict_label,
+          summary: workspace.summary,
+          doctor_summary: workspace.doctor_summary
+        },
+        current_posture: {
+          commits_ahead: latestPayload.push_preview?.commits_ahead ?? 0,
+          scanned_files: latestPayload.push_preview?.report?.scanned_files ?? 0,
+          blockers: latestPayload.push_preview?.decision?.blocking_findings?.length ?? 0,
+          warnings: latestPayload.push_preview?.decision?.warning_findings?.length ?? 0,
+          doctor_pass: doctorSummary.pass ?? 0,
+          doctor_review: (doctorSummary.warn ?? 0) + (doctorSummary.fail ?? 0)
+        },
+        audit: {
+          entries: filteredAudit.map(serializeAuditEntry)
+        }
+      };
+    };
+
+    const historyExportMarkdown = (payload) => {
+      if (!payload) return "# Wolfence History Export\n\nNo repository history is currently loaded.";
+      return [
+        "# Wolfence History Export",
+        "",
+        `Generated: ${payload.generated_at}`,
+        `History window: ${payload.history_window}`,
+        `Repository: ${payload.repository.name}`,
+        `Path: \`${payload.repository.path}\``,
+        "",
+        "## Current posture",
+        "",
+        `- Branch: ${payload.repository.branch} → ${payload.repository.upstream}`,
+        `- Verdict: ${payload.repository.verdict_label ?? "Unknown"}`,
+        `- Summary: ${payload.repository.summary ?? "n/a"}`,
+        `- Push posture: ${payload.current_posture.blockers} blockers / ${payload.current_posture.warnings} warnings`,
+        `- Doctor posture: ${payload.current_posture.doctor_pass} pass / ${payload.current_posture.doctor_review} review`,
+        "",
+        "## Audit timeline",
+        "",
+        ...(payload.audit.entries.length > 0
+          ? payload.audit.entries.map(
+              (entry) =>
+                `- #${entry.sequence} • ${entry.outcome} • ${entry.blocks} blocks • ${entry.warnings} warnings • ${entry.relative_time}`
+            )
+          : ["- No audit history in the selected window."])
+      ].join("\n");
+    };
+
+    const renderHistoryView = () => {
+      if (!latestPayload) return;
+      const workspace = latestPayload.workspaces.find((entry) => entry.path === selectedPath);
+      const auditEntries = filterAuditEntriesByWindow(latestPayload.audit?.entries ?? []);
+      renderHero(workspace, latestPayload.push_preview);
+      renderVerificationLine(latestPayload.bridge);
+      renderSummary(auditEntries);
+      renderDistribution(auditEntries);
+      renderLiveContext(workspace, latestPayload.doctor, latestPayload.push_preview);
+      renderTimeline(auditEntries);
+    };
+
+    const refreshHistoryView = async () => {
+      setHistoryStatus("working", "Refreshing history view", "Fetching the selected repo’s audit, doctor, and push posture.");
+      const consolePayload = await loadConsole();
+      const workspaces = consolePayload.workspaces ?? [];
+      const activePath = consolePayload.repository?.path ?? null;
+      if (!selectedPath || !workspaces.some((entry) => entry.path === selectedPath)) {
+        selectedPath = requestedRepo
+          ? decodeURIComponent(requestedRepo)
+          : activePath;
+      }
+      if (!workspaces.some((entry) => entry.path === selectedPath)) {
+        selectedPath = activePath;
+      }
+
+      renderWorkspaceList(workspaces, activePath);
+      const repoPayload = await loadRepositoryState(selectedPath, activePath);
+      latestPayload = {
+        ...consolePayload,
+        ...repoPayload
+      };
+      renderHistoryView();
+      const workspace = workspaces.find((entry) => entry.path === selectedPath);
+      setHistoryStatus(
+        "success",
+        "History view ready",
+        workspace ? `${workspace.name} is loaded with the ${historyWindow} audit window.` : `Showing ${historyWindow} of audit history.`
+      );
+    };
+
+    renderWindowControls();
+    const historyExportMarkdownTrigger = document.getElementById("history-export-md");
+    const historyExportJsonTrigger = document.getElementById("history-export-json");
+
+    if (historyExportMarkdownTrigger) {
+      historyExportMarkdownTrigger.addEventListener("click", () => {
+        const payload = historyExportPayload();
+        const repoName = payload?.repository?.name ?? "repo";
+        downloadArtifact(
+          `wolfence-history-${safeFileSegment(repoName)}-${safeFileSegment(historyWindow)}.md`,
+          historyExportMarkdown(payload),
+          "text/markdown;charset=utf-8"
+        );
+        setHistoryStatus("success", "History export ready", `Downloaded Markdown for ${repoName} (${historyWindow}).`);
+      });
+    }
+
+    if (historyExportJsonTrigger) {
+      historyExportJsonTrigger.addEventListener("click", () => {
+        const payload = historyExportPayload();
+        const repoName = payload?.repository?.name ?? "repo";
+        downloadArtifact(
+          `wolfence-history-${safeFileSegment(repoName)}-${safeFileSegment(historyWindow)}.json`,
+          JSON.stringify(payload, null, 2),
+          "application/json;charset=utf-8"
+        );
+        setHistoryStatus("success", "History export ready", `Downloaded JSON for ${repoName} (${historyWindow}).`);
+      });
+    }
+
+    refreshHistoryView().catch((error) => {
+      setHistoryStatus("error", "History view failed", error?.message ?? "The local bridge did not return history data.");
+      const container = document.getElementById("history-timeline");
+      if (container) {
+        container.innerHTML = `
+          <article class="audit-item">
+            <div class="audit-line">
+              <strong>History view failed</strong>
+              <span class="detail-muted">error</span>
+            </div>
+            <span class="detail-muted">${error?.message ?? "The local bridge did not return history data."}</span>
+          </article>
+        `;
+      }
+    });
+  </script>
+</ConsoleLayout>

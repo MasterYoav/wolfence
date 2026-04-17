@@ -7,6 +7,7 @@
 use std::fmt::{self, Display, Formatter};
 use std::path::Path;
 use std::process::{Command, ExitCode};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
@@ -24,6 +25,7 @@ use crate::core::receipts::{ReceiptIndex, RECEIPTS_DIR_RELATIVE_PATH};
 use crate::core::trust::{TrustStore, TRUST_DIR_RELATIVE_PATH};
 
 use super::json::{print_json, print_json_error};
+use super::ui;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -160,6 +162,8 @@ fn build_checks(repo_root: &Path, config: &ResolvedConfig) -> AppResult<Vec<Doct
     checks.push(check_curl_runtime());
     checks.push(check_gh_runtime());
     checks.push(check_openssl_runtime(repo_root)?);
+    checks.push(check_browser_console_surface(repo_root)?);
+    checks.push(check_browser_console_verification(repo_root)?);
     checks.push(check_pre_push_hook(repo_root)?);
     checks.push(check_audit_log(repo_root)?);
     checks.push(check_receipt_posture(repo_root)?);
@@ -951,6 +955,109 @@ fn check_openssl_runtime(repo_root: &Path) -> AppResult<DoctorCheck> {
     };
 
     Ok(check)
+}
+
+fn check_browser_console_surface(repo_root: &Path) -> AppResult<DoctorCheck> {
+    let checks = ui::verify_local_console_surface(repo_root)?;
+    let failed = checks.iter().filter(|check| !check.ok).collect::<Vec<_>>();
+
+    if failed.is_empty() {
+        return Ok(DoctorCheck {
+            name: "browser console surface",
+            status: DoctorStatus::Pass,
+            detail: format!(
+                "the local browser console bundle and bridge metadata passed {} smoke checks.",
+                checks.len()
+            ),
+            remediation: None,
+        });
+    }
+
+    let failed_labels = failed
+        .iter()
+        .map(|check| check.label)
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    Ok(DoctorCheck {
+        name: "browser console surface",
+        status: DoctorStatus::Warn,
+        detail: format!(
+            "the local browser console has {} failing smoke check(s): {}.",
+            failed.len(),
+            failed_labels
+        ),
+        remediation: Some(
+            "Run `npm run build` in `apps/web-console`, then `wolf ui verify` to inspect the failing browser-console surfaces."
+                .to_string(),
+        ),
+    })
+}
+
+fn check_browser_console_verification(repo_root: &Path) -> AppResult<DoctorCheck> {
+    let status = ui::load_verification_status(repo_root)?;
+    let Some(record) = status.browser else {
+        return Ok(DoctorCheck {
+            name: "browser console browser verification",
+            status: DoctorStatus::Info,
+            detail: "no browser-driven verification has been recorded yet.".to_string(),
+            remediation: Some(
+                "Run `wolf ui verify-browser` to record a real localhost browser verification result."
+                    .to_string(),
+            ),
+        });
+    };
+
+    let age = format_elapsed_since(record.checked_at_unix);
+    Ok(DoctorCheck {
+        name: "browser console browser verification",
+        status: if record.ok {
+            DoctorStatus::Pass
+        } else {
+            DoctorStatus::Warn
+        },
+        detail: if record.ok {
+            format!(
+                "latest browser-driven verification passed {} via `{}`.",
+                age, record.command
+            )
+        } else {
+            format!(
+                "latest browser-driven verification failed {} via `{}`: {}",
+                age, record.command, record.detail
+            )
+        },
+        remediation: if record.ok {
+            None
+        } else {
+            Some(
+                "Re-run `wolf ui verify-browser` to reproduce the browser failure and inspect the emitted debug artifacts."
+                    .to_string(),
+            )
+        },
+    })
+}
+
+fn format_elapsed_since(timestamp_unix: u64) -> String {
+    if timestamp_unix == 0 {
+        return "at an unknown time".to_string();
+    }
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(timestamp_unix);
+    let seconds = now.saturating_sub(timestamp_unix);
+
+    if seconds < 60 {
+        format!("{}s ago", seconds)
+    } else if seconds < 3600 {
+        format!("{}m ago", seconds / 60)
+    } else if seconds < 86_400 {
+        format!("{}h ago", seconds / 3600)
+    } else {
+        format!("{}d ago", seconds / 86_400)
+    }
 }
 
 fn check_pre_push_hook(repo_root: &Path) -> AppResult<DoctorCheck> {

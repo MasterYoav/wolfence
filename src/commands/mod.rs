@@ -17,6 +17,7 @@ mod push;
 mod receipt;
 mod scan;
 mod trust;
+mod ui;
 
 use std::process::ExitCode;
 
@@ -28,6 +29,7 @@ pub fn execute(command: Command) -> AppResult<ExitCode> {
     match command {
         Command::Init => init::run(),
         Command::Push { json } => push::run(json),
+        Command::Ui(command) => ui::run(command),
         Command::HookPrePush => hook_pre_push::run(),
         Command::Scan(command) => scan::run(command),
         Command::Doctor { json } => doctor::run(json),
@@ -59,6 +61,7 @@ fn print_help() {
     println!(
         "  push     Run scans and evaluate whether a push should be allowed (`--json` supported)"
     );
+    println!("  ui       Run or verify the local browser console and bridge");
     println!("  hook-pre-push    Internal Git hook entrypoint for push enforcement");
     println!("  scan     Run the local scan pipeline without taking Git side effects (`--json` supported)");
     println!("  doctor   Inspect local prerequisites and repository state (`--json` supported)");
@@ -79,6 +82,7 @@ fn print_help() {
     print_audit_help_summary();
     print_scan_help_summary();
     print_baseline_help_summary();
+    print_ui_help_summary();
 }
 
 fn print_receipt_help_summary() {
@@ -118,4 +122,14 @@ fn print_baseline_help_summary() {
     println!("  baseline capture [push|staged]");
     println!("  baseline show");
     println!("  baseline clear");
+}
+
+fn print_ui_help_summary() {
+    println!("UI Commands:");
+    println!("  ui");
+    println!("  ui serve");
+    println!("  ui verify");
+    println!("  ui verify-browser");
+    println!("  ui open");
+    println!("  ui help");
 }

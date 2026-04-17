@@ -32,6 +32,12 @@ pub fn discover_repo_root() -> AppResult<PathBuf> {
     Ok(PathBuf::from(output.trim()))
 }
 
+/// Discovers the repository root for an arbitrary path by asking Git directly.
+pub fn discover_repo_root_from(start_path: &Path) -> AppResult<PathBuf> {
+    let output = run_git_in_repo(start_path, &["rev-parse", "--show-toplevel"])?;
+    Ok(PathBuf::from(output.trim()))
+}
+
 /// Resolves the repository hooks directory path.
 pub fn hooks_dir(repo_root: &Path) -> AppResult<PathBuf> {
     let output = run_git_in_repo(repo_root, &["rev-parse", "--git-path", "hooks"])?;

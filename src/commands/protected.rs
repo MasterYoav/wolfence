@@ -75,6 +75,21 @@ pub fn evaluate_push_action() -> AppResult<PushEvaluation> {
     evaluate_push_action_with_progress(|_| {})
 }
 
+/// Evaluates the real outbound content of a protected push for one explicit
+/// repository root and emits progress events.
+pub fn evaluate_push_action_for_repo_with_progress<F>(
+    repo_root: &std::path::Path,
+    on_progress: F,
+) -> AppResult<PushEvaluation>
+where
+    F: FnMut(PushEvaluationProgress),
+{
+    evaluate_push_action_from_context(ExecutionContext::load_for_repo(
+        repo_root,
+        ProtectedAction::Push,
+    )?, on_progress)
+}
+
 /// Evaluates the real outbound content of a protected push and emits progress
 /// events that terminal UIs can render in real time.
 pub fn evaluate_push_action_with_progress<F>(mut on_progress: F) -> AppResult<PushEvaluation>
@@ -82,6 +97,16 @@ where
     F: FnMut(PushEvaluationProgress),
 {
     let context = ExecutionContext::load(ProtectedAction::Push)?;
+    evaluate_push_action_from_context(context, |event| on_progress(event))
+}
+
+fn evaluate_push_action_from_context<F>(
+    context: ExecutionContext,
+    mut on_progress: F,
+) -> AppResult<PushEvaluation>
+where
+    F: FnMut(PushEvaluationProgress),
+{
     let Some(push_status) = context.push_status.clone() else {
         return Ok(PushEvaluation::UpToDate { context });
     };

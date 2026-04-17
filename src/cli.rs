@@ -74,6 +74,15 @@ pub enum AuditCommand {
     Help,
 }
 
+/// Parsed browser-console workflows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UiCommand {
+    Serve,
+    Verify,
+    VerifyBrowser,
+    Help,
+}
+
 /// Parsed finding-baseline workflows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BaselineCommand {
@@ -103,6 +112,7 @@ pub enum ScanCommand {
 pub enum Command {
     Init,
     Push { json: bool },
+    Ui(UiCommand),
     HookPrePush,
     Scan(ScanCommand),
     Doctor { json: bool },
@@ -130,6 +140,7 @@ impl Cli {
             Some("push") => Command::Push {
                 json: parse_json_flag(args)?,
             },
+            Some("ui") => Command::Ui(parse_ui_command(args)?),
             Some("hook-pre-push") => {
                 ensure_no_extra_args(args)?;
                 Command::HookPrePush
@@ -318,6 +329,37 @@ where
     Ok(subcommand)
 }
 
+fn parse_ui_command<I>(mut args: I) -> Result<UiCommand, String>
+where
+    I: Iterator<Item = String>,
+{
+    let subcommand = match args.next().as_deref() {
+        None | Some("open") | Some("serve") => {
+            ensure_no_extra_args(args)?;
+            UiCommand::Serve
+        }
+        Some("verify") => {
+            ensure_no_extra_args(args)?;
+            UiCommand::Verify
+        }
+        Some("verify-browser") => {
+            ensure_no_extra_args(args)?;
+            UiCommand::VerifyBrowser
+        }
+        Some("-h" | "--help" | "help") => {
+            ensure_no_extra_args(args)?;
+            UiCommand::Help
+        }
+        Some(other) => {
+            return Err(format!(
+                "unknown ui command `{other}`. Run `wolf ui help` to see the supported browser-console workflows."
+            ))
+        }
+    };
+
+    Ok(subcommand)
+}
+
 fn parse_baseline_command<I>(mut args: I) -> Result<BaselineCommand, String>
 where
     I: Iterator<Item = String>,
@@ -447,7 +489,7 @@ where
 mod tests {
     use super::{
         AuditCommand, BaselineCommand, BaselineScope, Cli, Command, ReceiptCommand, ScanCommand,
-        TrustCommand,
+        TrustCommand, UiCommand,
     };
 
     #[test]
@@ -467,6 +509,35 @@ mod tests {
         let cli = Cli::parse(vec!["push".to_string(), "--json".to_string()].into_iter())
             .expect("parse should succeed");
         assert_eq!(cli.command, Command::Push { json: true });
+    }
+
+    #[test]
+    fn parses_ui_command() {
+        let cli = Cli::parse(vec!["ui".to_string()].into_iter()).expect("parse should succeed");
+        assert_eq!(cli.command, Command::Ui(UiCommand::Serve));
+    }
+
+    #[test]
+    fn parses_ui_serve_command() {
+        let cli = Cli::parse(vec!["ui".to_string(), "serve".to_string()].into_iter())
+            .expect("parse should succeed");
+        assert_eq!(cli.command, Command::Ui(UiCommand::Serve));
+    }
+
+    #[test]
+    fn parses_ui_verify_command() {
+        let cli = Cli::parse(vec!["ui".to_string(), "verify".to_string()].into_iter())
+            .expect("parse should succeed");
+        assert_eq!(cli.command, Command::Ui(UiCommand::Verify));
+    }
+
+    #[test]
+    fn parses_ui_verify_browser_command() {
+        let cli = Cli::parse(
+            vec!["ui".to_string(), "verify-browser".to_string()].into_iter(),
+        )
+        .expect("parse should succeed");
+        assert_eq!(cli.command, Command::Ui(UiCommand::VerifyBrowser));
     }
 
     #[test]

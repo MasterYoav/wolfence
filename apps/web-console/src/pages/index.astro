@@ -1,0 +1,3506 @@
+---
+import ConsoleLayout from "../layouts/ConsoleLayout.astro";
+import {
+  auditEntries,
+  blockers,
+  doctorChecks,
+  warnings,
+  workspaceRepos
+} from "../data/console";
+
+const activeRepo = workspaceRepos[0];
+---
+
+<ConsoleLayout
+  title="Wolfence Web Console"
+  description="Cross-platform browser console for Wolfence's local-first security gate."
+>
+  <div class="console-shell">
+    <aside class="rail">
+      <div class="rail-brand">
+        <div class="rail-mark">WO</div>
+        <div>
+          <h1>Wolfence</h1>
+          <p>Local browser console</p>
+        </div>
+      </div>
+
+      <p class="rail-section-label">Pinned repositories</p>
+      <div style="margin-bottom:12px;">
+        <input
+          id="workspace-search-input"
+          class="surface-input"
+          type="text"
+          placeholder="Search pinned repos"
+        />
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:12px;">
+        <button class="button secondary" id="workspace-refresh-all" type="button" style="width:100%;">
+          Refresh pinned repos
+        </button>
+      </div>
+      <small id="workspace-auto-refresh" style="display:block;margin:-4px 0 12px;opacity:.56;">
+        Auto-refresh is active through the local bridge.
+      </small>
+
+      <div class="repo-list" id="workspace-list">
+        {workspaceRepos.map((repo, index) => (
+          <article class:list={["repo-item", index === 0 && "is-active"]}>
+            <header>
+              <strong>{repo.name}</strong>
+              <span class:list={["repo-tone", repo.tone]}></span>
+            </header>
+            <p>{repo.verdict}</p>
+            <small>{repo.summary}</small>
+          </article>
+        ))}
+      </div>
+
+      <div style="margin-top: 18px;">
+        <p class="rail-section-label">Saved comparisons</p>
+        <div style="display:flex;gap:8px;margin-bottom:12px;">
+          <button class="button secondary" id="comparison-save-current" type="button" style="width:100%;">
+            Save current comparison
+          </button>
+        </div>
+        <div class="repo-list" id="comparison-set-list">
+          <article class="repo-item">
+            <header>
+              <strong>Loading</strong>
+              <span class="repo-tone review"></span>
+            </header>
+            <p>Preparing saved comparison sets</p>
+            <small>The local bridge will populate this list.</small>
+          </article>
+        </div>
+      </div>
+
+      <div style="margin-top: 18px;">
+        <p class="rail-section-label">Add repository</p>
+        <form id="workspace-add-form" style="display:grid;gap:10px;">
+          <input
+            id="workspace-path-input"
+            type="text"
+            placeholder="/path/to/repository"
+            style="min-height:42px;padding:0 14px;border-radius:14px;border:1px solid rgba(17,22,31,.12);background:rgba(255,255,255,.82);font:inherit;color:inherit;"
+          />
+          <button class="button secondary" type="submit" style="width:100%;">Pin repository</button>
+        </form>
+      </div>
+    </aside>
+
+    <main class="main">
+      <section class="hero">
+        <div>
+          <p class="panel-kicker">Cross-platform operator surface</p>
+          <h2>One local gate. One browser workspace.</h2>
+          <p id="hero-copy">
+            This Astro console mirrors the macOS app without moving trust
+            decisions into the frontend. It renders repo-local evidence,
+            structured <code>wolf --json</code> output, and the local
+            <code>wolf ui</code> bridge running on localhost.
+          </p>
+          <div class="hero-actions">
+            <button class="button primary" id="scan-trigger" type="button">Run local scan via bridge</button>
+            <button class="button secondary" id="push-trigger" type="button">Run protected push</button>
+            <button class="button secondary" id="command-palette-open" type="button">
+              Open command palette
+              <span class="shortcut-hint">Cmd/Ctrl+K</span>
+            </button>
+          </div>
+        </div>
+
+        <aside class="hero-side">
+          <dl>
+            <div>
+              <dt>Active repository</dt>
+              <dd id="repo-path">{activeRepo.path}</dd>
+            </div>
+            <div>
+              <dt>Branch</dt>
+              <dd id="branch-line">{activeRepo.branch} → {activeRepo.upstream}</dd>
+            </div>
+            <div>
+              <dt>Authority</dt>
+              <dd>
+                The Rust engine stays authoritative for scan, policy, and push.
+                The browser renders state and invokes local commands through a
+                localhost bridge.
+              </dd>
+            </div>
+          </dl>
+        </aside>
+      </section>
+
+      <section class="status-banner is-info" id="action-status" hidden>
+        <strong id="action-status-title">Bridge ready</strong>
+        <small id="action-status-detail">The console will surface action progress, success, and error states here.</small>
+      </section>
+
+      <div class="command-palette-backdrop" id="command-palette" hidden>
+        <div class="command-palette">
+          <div class="command-palette-header">
+            <input
+              id="command-palette-input"
+              class="surface-input"
+              type="text"
+              placeholder="Search actions, repositories, history, compare, refresh..."
+            />
+            <button class="button secondary" id="command-palette-close" type="button">Close</button>
+          </div>
+          <div class="command-palette-meta">
+            <span id="command-palette-status">Quick actions for the active repo and pinned fleet.</span>
+            <small>Enter to run, arrows to move, Esc to close</small>
+          </div>
+          <div class="command-palette-results" id="command-palette-results"></div>
+        </div>
+      </div>
+
+      <section class="summary-row">
+        <div class="summary-tile">
+          <span>Push posture</span>
+          <strong id="summary-push">Safe</strong>
+        </div>
+        <div class="summary-tile">
+          <span>Doctor summary</span>
+          <strong id="summary-doctor">2 pass / 1 review</strong>
+        </div>
+        <div class="summary-tile">
+          <span>Findings</span>
+          <strong id="summary-findings">2 blockers / 2 warnings</strong>
+        </div>
+        <div class="summary-tile">
+          <span>Audit trail</span>
+          <strong id="summary-audit">3 recent decisions</strong>
+        </div>
+      </section>
+
+      <section class="fleet-panel">
+        <header style="display:flex;align-items:flex-end;justify-content:space-between;gap:18px;flex-wrap:wrap;">
+          <div>
+            <p class="panel-kicker">Operations</p>
+            <h3 style="margin:0;">Pinned repo fleet board</h3>
+          </div>
+          <span class="panel-subtle" id="fleet-status">loading pinned workspace posture</span>
+        </header>
+
+        <div class="fleet-overview" id="fleet-overview">
+          <div class="fleet-metric">
+            <span>Needs action</span>
+            <strong>0</strong>
+          </div>
+          <div class="fleet-metric">
+            <span>Watchlist</span>
+            <strong>0</strong>
+          </div>
+          <div class="fleet-metric">
+            <span>Ready</span>
+            <strong>0</strong>
+          </div>
+          <div class="fleet-metric">
+            <span>Stale caches</span>
+            <strong>0</strong>
+          </div>
+        </div>
+
+        <div class="fleet-filters">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;" id="fleet-lane-filters">
+            <button class="button secondary is-active-filter" data-fleet-lane="all" type="button" style="min-height:34px;padding:0 12px;font-size:.8rem;">All lanes</button>
+            <button class="button secondary" data-fleet-lane="needs-action" type="button" style="min-height:34px;padding:0 12px;font-size:.8rem;">Needs action</button>
+            <button class="button secondary" data-fleet-lane="watchlist" type="button" style="min-height:34px;padding:0 12px;font-size:.8rem;">Watchlist</button>
+            <button class="button secondary" data-fleet-lane="ready" type="button" style="min-height:34px;padding:0 12px;font-size:.8rem;">Ready</button>
+          </div>
+          <button class="button secondary" id="fleet-stale-toggle" type="button" style="min-height:34px;padding:0 12px;font-size:.8rem;">
+            Show stale only
+          </button>
+        </div>
+
+        <div class="fleet-board" id="fleet-board">
+          <section class="fleet-column">
+            <header>
+              <h4>Needs action</h4>
+              <p>Repos with blockers, stale posture, or recent blocked activity.</p>
+            </header>
+            <div class="fleet-list">
+              <article class="fleet-item">
+                <header>
+                  <div>
+                    <h5>Loading</h5>
+                    <small class="detail-muted">The local bridge is preparing fleet posture.</small>
+                  </div>
+                  <span class="fleet-tag stale">waiting</span>
+                </header>
+              </article>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section class="grid">
+        <div class="stack">
+          <section class="panel">
+            <header>
+              <div>
+                <p class="panel-kicker">Push readiness</p>
+                <h3>Current outbound decision</h3>
+              </div>
+              <span class="panel-subtle">mirror of <code>wolf scan push --json</code></span>
+            </header>
+            <div class="dense-list" id="findings-list">
+              {blockers.map((finding) => (
+                <article class="finding">
+                  <div class="finding-line">
+                    <span class:list={["badge", finding.level.replace(" ", "-")]}>
+                      {finding.level}
+                    </span>
+                    <code>{finding.location}</code>
+                  </div>
+                  <strong>{finding.title}</strong>
+                </article>
+              ))}
+              {warnings.map((finding) => (
+                <article class="finding">
+                  <div class="finding-line">
+                    <span class:list={["badge", finding.level.replace(" ", "-")]}>
+                      {finding.level}
+                    </span>
+                    <code>{finding.location}</code>
+                  </div>
+                  <strong>{finding.title}</strong>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <section class="panel">
+            <header>
+              <div>
+                <p class="panel-kicker">Policy and receipts</p>
+                <h3>Repo-local trust surfaces</h3>
+              </div>
+              <span class="panel-subtle">read through the local bridge</span>
+            </header>
+            <div class="dense-list" id="policy-list">
+              <article class="finding">
+                <div class="finding-line">
+                  <strong>Policy mode</strong>
+                  <span class="detail-muted">standard (repo-file)</span>
+                </div>
+                <p class="detail-muted">
+                  Source: <code>.wolfence/config.toml</code>
+                </p>
+              </article>
+              <article class="finding">
+                <div class="finding-line">
+                  <strong>Receipt signature policy</strong>
+                  <span class="detail-muted">required for policy overrides</span>
+                </div>
+                <p class="detail-muted">
+                  Source: <code>.wolfence/policy/receipts.toml</code>
+                </p>
+              </article>
+              <article class="finding">
+                <div class="finding-line">
+                  <strong>Accepted baseline</strong>
+                  <span class="detail-muted">repo-local fingerprint history</span>
+                </div>
+                <p class="detail-muted">
+                  Source: <code>.wolfence/history/baseline.json</code>
+                </p>
+              </article>
+            </div>
+          </section>
+
+          <section class="panel">
+            <header>
+              <div>
+                <p class="panel-kicker">Comparison</p>
+                <h3>Pinned repo comparison board</h3>
+              </div>
+              <span class="panel-subtle" id="comparison-status">active repo only</span>
+            </header>
+            <div class="comparison-board">
+              <div class="comparison-toolbar">
+                <p class="detail-muted" style="margin:0;">
+                  Compare live push posture, doctor status, and recent audit across pinned repos without changing the current push target.
+                </p>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
+                  <div id="history-window-controls" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
+                  <button class="button secondary" id="comparison-export-md" type="button" style="min-height:34px;padding:0 12px;font-size:.8rem;">
+                    Export Markdown
+                  </button>
+                  <button class="button secondary" id="comparison-export-json" type="button" style="min-height:34px;padding:0 12px;font-size:.8rem;">
+                    Export JSON
+                  </button>
+                  <button class="button secondary" id="comparison-clear" type="button" style="min-height:34px;padding:0 12px;font-size:.8rem;">
+                    Reset to active repo
+                  </button>
+                </div>
+              </div>
+              <div class="comparison-grid" id="comparison-grid">
+                <article class="comparison-column">
+                  <header>
+                    <h4>Comparison board</h4>
+                    <div class="comparison-meta">
+                      <span>idle</span>
+                      <span>0 repos</span>
+                    </div>
+                  </header>
+                  <div class="comparison-stats">
+                    <div class="comparison-stat">
+                      <span>Hint</span>
+                      <strong>Add pinned repos into comparison from the rail.</strong>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <header>
+              <div>
+                <p class="panel-kicker">Workspace Drill-Down</p>
+                <h3>Pinned repo dossier</h3>
+              </div>
+              <span class="panel-subtle" id="workspace-dossier-status">selected repo</span>
+            </header>
+            <div class="dense-list" id="workspace-dossier">
+              <article class="audit-item">
+                <div class="audit-line">
+                  <strong>Inspector ready</strong>
+                  <span class="detail-muted">idle</span>
+                </div>
+                <span class="detail-muted">
+                  Pick any pinned repo to inspect its branch, push posture, doctor state, and recent audit activity without changing the active push target.
+                </span>
+              </article>
+            </div>
+          </section>
+        </div>
+
+        <div class="stack">
+          <section class="panel">
+            <header>
+              <div>
+                <p class="panel-kicker">Live scan</p>
+                <h3>Engine activity</h3>
+              </div>
+              <span class="panel-subtle" id="scan-status">idle</span>
+            </header>
+            <div class="dense-list" id="scan-activity">
+              <article class="audit-item">
+                <div class="audit-line">
+                  <strong>Bridge ready</strong>
+                  <span class="detail-muted">idle</span>
+                </div>
+                <span class="detail-muted">
+                  Start a push-preview stream to watch the real Rust engine report
+                  scanner and file progress over localhost.
+                </span>
+              </article>
+            </div>
+          </section>
+
+          <section class="panel">
+            <header>
+              <div>
+                <p class="panel-kicker">Doctor</p>
+                <h3>Local enforcement health</h3>
+              </div>
+            </header>
+            <div class="dense-list" id="doctor-list">
+              {doctorChecks.map((check) => (
+                <article class="doctor-item">
+                  <div class="doctor-line">
+                    <strong>{check.name}</strong>
+                    <span class="detail-muted">{check.state}</span>
+                  </div>
+                  <span class="detail-muted">{check.detail}</span>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <section class="panel">
+            <header>
+              <div>
+                <p class="panel-kicker">Audit</p>
+                <h3>Recent decisions</h3>
+              </div>
+              <span class="panel-subtle">from <code>.wolfence/audit/decisions.jsonl</code></span>
+            </header>
+            <div class="dense-list" id="audit-list">
+              {auditEntries.map((entry) => (
+                <article class="audit-item">
+                  <div class="audit-line">
+                    <strong>{entry.sequence}</strong>
+                    <span class="detail-muted">{entry.outcome} • {entry.time}</span>
+                  </div>
+                  <span class="detail-muted">{entry.detail}</span>
+                </article>
+              ))}
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section class="bridge">
+        <div>
+          <p class="panel-kicker">Bridge model</p>
+          <h3>Browser UI, local-only authority</h3>
+          <p class="detail-muted">
+            The browser is intentionally downstream of the Wolfence engine. It
+            should never decide whether a push is safe. It should render the
+            same evidence the macOS app already consumes and invoke local Rust
+            command surfaces through localhost.
+          </p>
+        </div>
+
+        <div>
+          <ul>
+            <li><code>GET /api/repositories/:id/doctor</code> → <code>wolf doctor --json</code></li>
+            <li><code>GET /api/repositories/:id/push-preview</code> → <code>wolf scan push --json</code></li>
+            <li><code>POST /api/repositories/:id/push</code> → protected Rust path, never frontend policy</li>
+            <li><code>GET /api/repositories/:id/audit</code> → repo-local audit evidence</li>
+            <li>streamed scan progress later via SSE or WebSocket from the local bridge</li>
+          </ul>
+          <div class="dense-list" id="bridge-verification" style="margin-top:16px;">
+            <article class="audit-item">
+              <div class="audit-line">
+                <strong>Verification posture</strong>
+                <span class="detail-muted">loading</span>
+              </div>
+              <span class="detail-muted">The local bridge will surface the latest persisted smoke and browser-backed verification results here.</span>
+            </article>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+            <button class="button secondary" id="verification-surface-trigger" type="button" style="min-height:34px;padding:0 12px;font-size:.8rem;">
+              Run smoke verify
+            </button>
+            <button class="button secondary" id="verification-browser-trigger" type="button" style="min-height:34px;padding:0 12px;font-size:.8rem;">
+              Run browser verify
+            </button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script is:inline>
+    const badgeClass = (level) => {
+      switch (level) {
+        case "critical":
+          return "critical";
+        case "medium":
+        case "medium risk":
+          return "medium-risk";
+        case "low":
+        case "low risk":
+          return "low-risk";
+        default:
+          return "info";
+      }
+    };
+
+    const severityLabel = (value) => {
+      switch (value) {
+        case "critical":
+          return "critical";
+        case "high":
+          return "high risk";
+        case "medium":
+          return "medium risk";
+        case "low":
+          return "low risk";
+        default:
+          return "info";
+      }
+    };
+
+    const workspaceTone = (verdict) => {
+      switch (verdict) {
+        case "block":
+          return "blocked";
+        case "warn":
+          return "review";
+        default:
+          return "safe";
+      }
+    };
+
+    const formatRefreshTime = (unix) => {
+      if (!unix) return "Not refreshed yet";
+      const seconds = Math.max(0, Math.floor(Date.now() / 1000) - unix);
+      if (seconds < 60) return "Refreshed just now";
+      if (seconds < 3600) return `Refreshed ${Math.floor(seconds / 60)}m ago`;
+      if (seconds < 86400) return `Refreshed ${Math.floor(seconds / 3600)}h ago`;
+      return `Refreshed ${Math.floor(seconds / 86400)}d ago`;
+    };
+
+    const formatVerificationTime = (unix) => {
+      if (!unix) return "never";
+      const seconds = Math.max(0, Math.floor(Date.now() / 1000) - unix);
+      if (seconds < 60) return `${seconds}s ago`;
+      if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+      if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+      return `${Math.floor(seconds / 86400)}d ago`;
+    };
+
+    const renderVerificationRecordHtml = (label, record) => {
+      if (!record) {
+        return `
+          <article class="audit-item" style="padding:10px 0 0;">
+            <div class="audit-line">
+              <strong>${label}</strong>
+              <span class="detail-muted">not recorded</span>
+            </div>
+            <span class="detail-muted">No persisted result yet for this repository.</span>
+          </article>
+        `;
+      }
+
+      return `
+        <article class="audit-item" style="padding:10px 0 0;">
+          <div class="audit-line">
+            <strong>${label}</strong>
+            <span class="detail-muted">${record.ok ? "pass" : "review"}</span>
+          </div>
+          <span class="detail-muted">${record.command} • ${formatVerificationTime(record.checked_at_unix)} • ${record.detail}</span>
+        </article>
+      `;
+    };
+
+    const HISTORY_WINDOWS = {
+      "24h": 24 * 60 * 60,
+      "7d": 7 * 24 * 60 * 60,
+      "30d": 30 * 24 * 60 * 60,
+      all: null
+    };
+
+    const formatAuditTime = (unix) => {
+      if (!unix) return "n/a";
+      const seconds = Math.max(0, Math.floor(Date.now() / 1000) - unix);
+      if (seconds < 60) return `${seconds}s ago`;
+      if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+      if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+      return `${Math.floor(seconds / 86400)}d ago`;
+    };
+
+    const filterAuditEntriesByWindow = (entries, window) => {
+      const seconds = HISTORY_WINDOWS[window];
+      if (seconds == null) return [...entries];
+      const cutoff = Math.floor(Date.now() / 1000) - seconds;
+      return entries.filter((entry) => (entry.timestamp_unix ?? 0) >= cutoff);
+    };
+
+    const refreshWorkspace = async (path) => {
+      const response = await fetch("/api/workspaces/refresh", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ path })
+      });
+      return response.json();
+    };
+
+    const refreshAllWorkspaces = async () => {
+      const response = await fetch("/api/workspaces/refresh-all", {
+        method: "POST"
+      });
+      return response.json();
+    };
+
+    const saveComparisonSet = async (name, paths) => {
+      const response = await fetch("/api/comparison-sets", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ name, paths })
+      });
+      return response.json();
+    };
+
+    const loadComparisonSetSelection = async (name) => {
+      const response = await fetch("/api/comparison-sets/select", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ name })
+      });
+      return response.json();
+    };
+
+    const clearComparisonSetSelection = async () => {
+      const response = await fetch("/api/comparison-sets/clear", {
+        method: "POST"
+      });
+      return response.json();
+    };
+
+    const removeComparisonSet = async (name) => {
+      const response = await fetch("/api/comparison-sets/remove", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ name })
+      });
+      return response.json();
+    };
+
+    const setButtonBusy = (button, busy) => {
+      if (!button) return;
+      if (busy) {
+        button.setAttribute("data-busy", "true");
+        button.setAttribute("disabled", "disabled");
+      } else {
+        button.removeAttribute("data-busy");
+        button.removeAttribute("disabled");
+      }
+    };
+
+    const setActionStatus = (tone, title, detail) => {
+      const banner = document.getElementById("action-status");
+      const titleElement = document.getElementById("action-status-title");
+      const detailElement = document.getElementById("action-status-detail");
+      if (!banner || !titleElement || !detailElement) return;
+      banner.hidden = false;
+      banner.className = `status-banner is-${tone}`;
+      titleElement.textContent = title;
+      detailElement.textContent = detail;
+    };
+
+    const clearActionStatus = () => {
+      const banner = document.getElementById("action-status");
+      if (!banner) return;
+      banner.hidden = true;
+    };
+
+    const loadCurrentRepositoryState = async () => {
+      const [consoleResponse, doctorResponse, pushPreviewResponse, auditResponse] =
+        await Promise.all([
+          fetch("/api/console"),
+          fetch("/api/repositories/current/doctor"),
+          fetch("/api/repositories/current/push-preview"),
+          fetch("/api/repositories/current/audit")
+        ]);
+
+      const [consolePayload, doctorPayload, pushPreviewPayload, auditPayload] =
+        await Promise.all([
+          consoleResponse.json(),
+          doctorResponse.json(),
+          pushPreviewResponse.json(),
+          auditResponse.json()
+        ]);
+
+      return {
+        ...consolePayload,
+        doctor: doctorPayload,
+        push_preview: pushPreviewPayload,
+        audit: auditPayload
+      };
+    };
+
+    const encodeRepositoryId = (path) => encodeURIComponent(path);
+    const historyHref = (path) => `/history?repo=${encodeRepositoryId(path)}`;
+    const WORKSPACE_ACTION_STYLE = "min-height:34px;padding:0 12px;font-size:.8rem;";
+    const workspaceVerificationSupported = (workspace) => workspace?.verification?.supported !== false;
+
+    const workspaceActionDescriptors = (workspace, options = {}) => {
+      const {
+        context = "rail",
+        activePath = null,
+        workspaceCount = 0
+      } = options;
+      const isActive = workspace.path === activePath || workspace.selected === true;
+      const compareLabel = comparisonPaths.has(workspace.path) ? "Compared" : "Compare";
+      const supportedVerification = workspaceVerificationSupported(workspace);
+
+      if (context === "rail") {
+        return [
+          { action: "select", label: isActive ? "Selected" : "Open", disabled: false },
+          { action: "inspect", label: "Inspect" },
+          { action: "compare", label: compareLabel },
+          { action: "refresh", label: "Refresh" },
+          { action: "remove", label: "Remove", disabled: workspaceCount === 1 }
+        ];
+      }
+
+      if (context === "fleet") {
+        return [
+          { action: "inspect", label: "Inspect" },
+          { action: "compare", label: compareLabel },
+          ...(supportedVerification
+            ? [
+                { action: "verify-surface", label: "Smoke verify" },
+                { action: "verify-browser", label: "Browser verify" }
+              ]
+            : []),
+          { action: "refresh", label: "Refresh" },
+          { action: "select", label: isActive ? "Active" : "Make active", disabled: isActive }
+        ];
+      }
+
+      if (context === "dossier") {
+        return [
+          { action: "refresh", label: "Refresh dossier" },
+          { action: "select", label: "Make active", disabled: isActive },
+          { action: "verify-surface", label: "Smoke verify", disabled: !supportedVerification },
+          { action: "verify-browser", label: "Browser verify", disabled: !supportedVerification }
+        ];
+      }
+
+      return [];
+    };
+
+    const renderWorkspaceActionButtons = (workspace, options = {}) =>
+      workspaceActionDescriptors(workspace, options)
+        .map(
+          ({ action, label, disabled = false }) => `
+            <button
+              class="button secondary workspace-action"
+              type="button"
+              data-workspace-action="${action}"
+              data-workspace-path="${workspace.path}"
+              ${disabled ? "disabled" : ""}
+              style="${WORKSPACE_ACTION_STYLE}"
+            >${label}</button>
+          `
+        )
+        .join("");
+
+    const runWorkspaceAction = async (action, path, context = "generic") => {
+      switch (action) {
+        case "select":
+          await selectWorkspaceAction(path, { context });
+          break;
+        case "inspect":
+          await inspectWorkspaceAction(path, { context });
+          break;
+        case "compare":
+          await toggleComparisonAction(path);
+          break;
+        case "refresh":
+          await refreshWorkspaceAction(path, { context });
+          break;
+        case "verify-surface":
+          await runWorkspaceVerificationAction(path, "surface", { context });
+          break;
+        case "verify-browser":
+          await runWorkspaceVerificationAction(path, "browser", { context });
+          break;
+      }
+    };
+
+    const workspacePaletteItems = (workspace, activePath) => {
+      const descriptorContext = "fleet";
+      const baseItems = workspaceActionDescriptors(workspace, {
+        context: descriptorContext,
+        activePath
+      })
+        .filter(({ action }) => action !== "remove")
+        .map(({ action, label }) => {
+          const category =
+            action === "verify-surface" || action === "verify-browser"
+              ? "Verification"
+              : "Repository";
+          const meta = {
+            select: workspace.selected ? "active" : "open",
+            inspect: "dossier",
+            compare: "compare",
+            refresh: "refresh",
+            "verify-surface": "ui verify",
+            "verify-browser": "ui verify-browser"
+          }[action] ?? "repo";
+
+          const detail =
+            action === "select"
+              ? `${workspace.branch ?? "unknown"} -> ${workspace.upstream ?? "<none>"} • ${workspace.summary}`
+              : workspace.path;
+
+          return {
+            category,
+            label: `${label}: ${workspace.name}`,
+            detail,
+            meta,
+            run: () => runWorkspaceAction(action, workspace.path, "generic")
+          };
+        });
+
+      baseItems.push({
+        category: "History",
+        label: `Open history: ${workspace.name}`,
+        detail: workspace.path,
+        meta: "history",
+        run: () => {
+          window.location.href = historyHref(workspace.path);
+        }
+      });
+
+      return baseItems;
+    };
+
+    const workspaceActionStatusSpec = (action, context, phase, path) => {
+      const specs = {
+        select: {
+          working: {
+            title: context === "dossier" ? "Making inspected repo active" : "Switching active repository",
+            detail: path
+          },
+          success: {
+            title:
+              context === "fleet"
+                ? "Active repository updated from fleet board"
+                : context === "dossier"
+                  ? "Inspected repo is now active"
+                  : "Active repository updated",
+            detail: path
+          },
+          error: {
+            title:
+              context === "fleet"
+                ? "Failed to switch active repository"
+                : context === "dossier"
+                  ? "Failed to make repo active"
+                  : "Failed to switch repository",
+            detail:
+              context === "fleet"
+                ? "The local bridge did not accept the fleet selection."
+                : context === "dossier"
+                  ? "The local bridge did not switch the active repository."
+                  : "The local bridge did not accept the workspace selection."
+          }
+        },
+        inspect: {
+          working: {
+            title:
+              context === "fleet" ? "Loading fleet repo dossier" : "Loading pinned repo dossier",
+            detail: path
+          },
+          success: {
+            title:
+              context === "fleet" ? "Fleet repo dossier loaded" : "Pinned repo dossier loaded",
+            detail: path
+          },
+          error: {
+            title:
+              context === "fleet" ? "Failed to load fleet repo dossier" : "Failed to load dossier",
+            detail: "The local bridge did not return repository detail."
+          }
+        },
+        refresh: {
+          working: {
+            title:
+              context === "dossier"
+                ? "Refreshing dossier"
+                : context === "fleet"
+                  ? "Refreshing fleet repo"
+                  : "Refreshing pinned repository",
+            detail: path
+          },
+          success: {
+            title:
+              context === "dossier"
+                ? "Dossier refreshed"
+                : context === "fleet"
+                  ? "Fleet repo refreshed"
+                  : "Pinned repository refreshed",
+            detail: path
+          },
+          error: {
+            title:
+              context === "dossier"
+                ? "Failed to refresh dossier"
+                : context === "fleet"
+                  ? "Fleet repo refresh failed"
+                  : "Pinned repository refresh failed",
+            detail:
+              context === "dossier"
+                ? "The local bridge did not refresh the dossier."
+                : "The local bridge did not complete the refresh."
+          }
+        },
+        compare: {
+          working: {
+            title: "Updating comparison board",
+            detail: path
+          },
+          success: {
+            title: comparisonPaths.has(path) ? "Repo removed from comparison" : "Repo added to comparison",
+            detail: path
+          },
+          error: {
+            title: "Failed to update comparison board",
+            detail: "The comparison board did not update."
+          }
+        },
+        "verify-surface": {
+          working: {
+            title:
+              context === "generic" ? "Running repo smoke verification" : "Running repo smoke verification",
+            detail: path
+          },
+          success: {
+            title: "Repo smoke verification passed",
+            detail: "Verification completed."
+          },
+          error: {
+            title: context === "fleet" ? "Fleet smoke verification failed" : "Smoke verification failed",
+            detail: "The local bridge did not complete repo-local smoke verification."
+          },
+          unsupported: {
+            title: "Smoke verification unavailable",
+            detail: "This repository does not contain a Wolfence browser console surface."
+          }
+        },
+        "verify-browser": {
+          working: {
+            title: "Running repo browser verification",
+            detail: path
+          },
+          success: {
+            title: "Repo browser verification passed",
+            detail: "Verification completed."
+          },
+          error: {
+            title: context === "fleet" ? "Fleet browser verification failed" : "Browser verification failed",
+            detail: "The local bridge did not complete repo-local browser verification."
+          },
+          unsupported: {
+            title: "Browser verification unavailable",
+            detail: "This repository does not contain a Wolfence browser console surface."
+          }
+        },
+        remove: {
+          working: {
+            title: "Removing pinned repository",
+            detail: path
+          },
+          success: {
+            title: "Pinned repository removed",
+            detail: path
+          },
+          error: {
+            title: "Pinned repository removal failed",
+            detail: "The local bridge did not complete the removal."
+          }
+        }
+      };
+
+      return specs[action]?.[phase] ?? {
+        title: "Workspace action",
+        detail: path
+      };
+    };
+
+    const announceWorkspaceActionStatus = (action, context, phase, path, detailOverride) => {
+      const spec = workspaceActionStatusSpec(action, context, phase, path);
+      const tone = phase === "success" ? "success" : phase === "working" ? "working" : phase === "unsupported" ? "info" : "error";
+      setActionStatus(tone, spec.title, detailOverride ?? spec.detail);
+    };
+
+    const consoleActionStatusSpec = (action, phase, detail) => {
+      const specs = {
+        "comparison-set-load": {
+          working: { title: "Loading saved comparison", detail },
+          success: { title: "Saved comparison loaded", detail },
+          error: { title: "Failed to load saved comparison", detail: "The local bridge did not restore the saved set." }
+        },
+        "comparison-set-remove": {
+          working: { title: "Removing saved comparison", detail },
+          success: { title: "Saved comparison removed", detail },
+          error: { title: "Failed to remove saved comparison", detail: "The local bridge did not remove the saved set." }
+        },
+        "comparison-save": {
+          working: { title: "Saving current comparison", detail },
+          success: { title: "Comparison saved", detail },
+          error: { title: "Failed to save comparison", detail: "The local bridge did not persist the named comparison." }
+        },
+        "dossier-export": {
+          success: { title: "Dossier export ready", detail }
+        },
+        "comparison-export": {
+          success: { title: "Comparison export ready", detail }
+        },
+        "verify-surface-global": {
+          error: { title: "Smoke verification failed", detail: "The local bridge did not complete the smoke verification." }
+        },
+        "verify-browser-global": {
+          error: { title: "Browser verification failed", detail: "The local bridge did not complete the browser-backed verification." }
+        },
+        "refresh-all": {
+          working: { title: "Refreshing all pinned repositories", detail: "The local bridge is recomputing cached summaries." },
+          success: { title: "Pinned repositories refreshed", detail: "Cached rail summaries are now current." },
+          error: { title: "Pinned repository refresh failed", detail: "The local bridge did not complete the refresh-all action." }
+        },
+        "protected-push": {
+          working: { title: "Running protected push", detail: "The browser is invoking the same guarded path as `wolf push`." },
+          success: { title: "Protected push completed", detail },
+          error: { title: "Protected push failed", detail: detail ?? "The protected push request failed before the browser received a final result." }
+        },
+        "workspace-pin": {
+          working: { title: "Pinning repository", detail },
+          success: { title: "Repository pinned", detail },
+          error: { title: "Failed to pin repository", detail: "The local bridge did not accept the repository path." }
+        }
+      };
+
+      return specs[action]?.[phase] ?? { title: "Console action", detail };
+    };
+
+    const announceConsoleActionStatus = (action, phase, detailOverride) => {
+      const spec = consoleActionStatusSpec(action, phase, detailOverride);
+      const tone = phase === "success" ? "success" : phase === "working" ? "working" : "error";
+      setActionStatus(tone, spec.title, detailOverride ?? spec.detail);
+    };
+
+    const comparisonActionDescriptors = (comparisonSetPayload = {}) => {
+      const sets = comparisonSetPayload?.sets ?? [];
+      return {
+        saveCurrent: {
+          label: "Save current comparison",
+          detail: "Persist the current comparison board as a named set.",
+          meta: "compare"
+        },
+        savedSets: sets.map((set) => ({
+          name: set.name,
+          loadLabel: `${set.selected ? "Loaded" : "Load"} comparison: ${set.name}`,
+          removeLabel: `Remove comparison: ${set.name}`,
+          detail: `${set.count} repos • ${set.paths.join(" • ")}`
+        }))
+      };
+    };
+
+    const globalConsoleActionDescriptors = () => [
+      {
+        id: "scan",
+        category: "Action",
+        label: "Run local scan via bridge",
+        detail: "Stream the protected push preview from the Rust engine.",
+        meta: "scan"
+      },
+      {
+        id: "push",
+        category: "Action",
+        label: "Run protected push",
+        detail: "Invoke the same guarded path as wolf push for the active repo.",
+        meta: "push"
+      },
+      {
+        id: "refresh-all",
+        category: "Action",
+        label: "Refresh pinned repositories",
+        detail: "Recompute cached posture for every pinned repo.",
+        meta: "refresh"
+      },
+      {
+        id: "save-current-comparison",
+        category: "Action",
+        label: "Save current comparison",
+        detail: "Persist the current comparison board as a named set.",
+        meta: "compare"
+      },
+      {
+        id: "verify-surface",
+        category: "Verification",
+        label: "Run smoke verification",
+        detail: "Verify bundle, bridge routes, and machine-readable browser-console surfaces.",
+        meta: "ui verify"
+      },
+      {
+        id: "verify-browser",
+        category: "Verification",
+        label: "Run browser verification",
+        detail: "Run the browser-backed localhost UI verifier through the local bridge.",
+        meta: "ui verify-browser"
+      }
+    ];
+
+    const runGlobalConsoleAction = async (action) => {
+      switch (action) {
+        case "scan":
+          startScanStream();
+          break;
+        case "push":
+          await runProtectedPush();
+          break;
+        case "refresh-all": {
+          announceConsoleActionStatus("refresh-all", "working");
+          appendEngineActivity("refresh-all-start");
+          const payload = await refreshAllWorkspaces();
+          if (payload.error) {
+            appendEngineActivity("refresh-all-error", { detail: payload.error.message });
+            setScanStatus("error");
+            announceConsoleActionStatus("refresh-all", "error", payload.error.message);
+            return;
+          }
+          await refreshConsole();
+          announceConsoleActionStatus("refresh-all", "success");
+          break;
+        }
+        case "save-current-comparison":
+          await runComparisonSetAction("save-current");
+          break;
+        case "verify-surface":
+          await runVerificationAction("surface");
+          break;
+        case "verify-browser":
+          await runVerificationAction("browser");
+          break;
+      }
+    };
+
+    const bindGlobalActionButton = (button, action, options = {}) => {
+      if (!button) return;
+      const { busy = false, errorAction = action } = options;
+      button.addEventListener("click", async () => {
+        if (busy) {
+          setButtonBusy(button, true);
+        }
+        try {
+          await runGlobalConsoleAction(action);
+        } catch (error) {
+          announceConsoleActionStatus(errorAction, "error", error?.message);
+        } finally {
+          if (busy) {
+            setButtonBusy(button, false);
+          }
+        }
+      });
+    };
+
+    const runComparisonSetAction = async (action, payload = {}) => {
+      if (action === "save-current") {
+        const currentPaths = [...comparisonPaths];
+        if (currentPaths.length === 0) return;
+        const proposedName = selectedComparisonSetName ?? `comparison-${historyWindow}`;
+        const name = window.prompt("Save comparison set as:", proposedName)?.trim();
+        if (!name) return;
+        announceConsoleActionStatus("comparison-save", "working", name);
+        await saveComparisonSet(name, currentPaths);
+        selectedComparisonSetName = name;
+        await refreshConsole();
+        announceConsoleActionStatus("comparison-save", "success", `${name} now tracks ${currentPaths.length} pinned repos.`);
+        return;
+      }
+
+      if (action === "load" && payload.name) {
+        announceConsoleActionStatus("comparison-set-load", "working", payload.name);
+        await loadComparisonSetSelection(payload.name);
+        await refreshConsole();
+        announceConsoleActionStatus("comparison-set-load", "success", payload.name);
+        return;
+      }
+
+      if (action === "remove" && payload.name) {
+        const confirmed = window.confirm(`Remove saved comparison set "${payload.name}"?`);
+        if (!confirmed) return;
+        announceConsoleActionStatus("comparison-set-remove", "working", payload.name);
+        await removeComparisonSet(payload.name);
+        await refreshConsole();
+        announceConsoleActionStatus("comparison-set-remove", "success", payload.name);
+      }
+    };
+
+    const engineActivityEntry = (kind, payload = {}) => {
+      switch (kind) {
+        case "scan-start":
+          return {
+            title: "Push preview",
+            meta: "starting",
+            detail: "Opening localhost scan stream from the Rust engine."
+          };
+        case "scan-snapshot":
+          return {
+            title: "Snapshot loaded",
+            meta: `${payload.commits_ahead} commits ahead`,
+            detail: `${payload.discovered_files} discovered, ${payload.scanned_files} scanned, ${payload.ignored_files} ignored`
+          };
+        case "scan-scanner-started":
+          return {
+            title: payload.label,
+            meta: `${payload.index}/${payload.total}`,
+            detail: "Scanner started"
+          };
+        case "scan-scanner-finished":
+          return {
+            title: payload.label,
+            meta: `${payload.index}/${payload.total}`,
+            detail: `${payload.findings} new findings from this scanner`
+          };
+        case "scan-file-started":
+          return {
+            title: payload.label,
+            meta: `${payload.current}/${payload.total}`,
+            detail: payload.file
+          };
+        case "scan-phase":
+          return {
+            title: payload.label,
+            meta: "phase",
+            detail: "Engine is advancing through the protected push pipeline."
+          };
+        case "scan-done":
+          return {
+            title: "Scan complete",
+            meta: payload.status,
+            detail:
+              payload.status === "ready"
+                ? `${payload.blocks} blockers, ${payload.warnings} warnings, ${payload.findings} findings`
+                : "No outbound push scope is currently available."
+          };
+        case "scan-error":
+          return {
+            title: "Stream interrupted",
+            meta: "error",
+            detail: "The localhost scan stream closed before completion."
+          };
+        case "push-start":
+          return {
+            title: "Protected push",
+            meta: "starting",
+            detail: "Running the same guarded push path as `wolf push`."
+          };
+        case "push-done":
+          return {
+            title: "Protected push",
+            meta: payload.outcome,
+            detail: payload.detail
+          };
+        case "push-error":
+          return {
+            title: "Protected push",
+            meta: "error",
+            detail: "The protected push request failed before the browser received a result."
+          };
+        case "refresh-all-start":
+          return {
+            title: "Workspace refresh",
+            meta: "running",
+            detail: "Refreshing all pinned workspace summaries."
+          };
+        case "refresh-all-error":
+          return {
+            title: "Workspace refresh",
+            meta: "error",
+            detail: payload.detail
+          };
+        default:
+          return {
+            title: "Engine activity",
+            meta: "info",
+            detail: payload.detail ?? "Engine activity recorded."
+          };
+      }
+    };
+
+    const appendEngineActivity = (kind, payload = {}) => {
+      appendScanEntry(engineActivityEntry(kind, payload));
+    };
+
+    const announceScanLifecycleStatus = (phase, payload = {}) => {
+      if (phase === "start") {
+        setActionStatus("working", "Starting live push preview", "The Rust engine is streaming scan progress over localhost.");
+        return;
+      }
+
+      if (phase === "done") {
+        const detail =
+          payload.status === "ready"
+            ? `${payload.blocks} blockers, ${payload.warnings} warnings, ${payload.findings} findings`
+            : "No outbound push scope is currently available.";
+        setActionStatus(
+          payload.status === "ready" || payload.status === "up-to-date" ? "success" : "info",
+          "Live push preview finished",
+          detail
+        );
+        return;
+      }
+
+      setActionStatus("error", "Live push preview interrupted", "The localhost scan stream closed before the browser received a final result.");
+    };
+
+    const bindWorkspaceActionButtons = (container, options = {}) => {
+      if (!container) return;
+      const { context = "rail" } = options;
+
+      for (const item of container.querySelectorAll(".workspace-action")) {
+        item.addEventListener("click", async (event) => {
+          event.stopPropagation();
+          const path = item.getAttribute("data-workspace-path");
+          const action = item.getAttribute("data-workspace-action");
+          if (!path || !action) return;
+
+          if (action === "compare") {
+            setButtonBusy(item, true);
+            try {
+              announceWorkspaceActionStatus(action, context, "working", path);
+              await toggleComparisonAction(path);
+              announceWorkspaceActionStatus(action, context, "success", path);
+            } catch (error) {
+              announceWorkspaceActionStatus(action, context, "error", path, error?.message);
+            } finally {
+              setButtonBusy(item, false);
+            }
+            return;
+          }
+
+          if (action === "remove") {
+            const confirmed = window.confirm(`Remove ${path} from pinned workspaces?`);
+            if (!confirmed) return;
+          }
+
+          setButtonBusy(item, true);
+          try {
+            announceWorkspaceActionStatus(action, context, "working", path);
+            switch (action) {
+              case "select":
+                await selectWorkspaceAction(path, { announce: false });
+                announceWorkspaceActionStatus(action, context, "success", path);
+                break;
+              case "inspect":
+                await inspectWorkspaceAction(path, { announce: false });
+                announceWorkspaceActionStatus(action, context, "success", path);
+                break;
+              case "refresh":
+                if (context === "fleet") {
+                  fleetAuditState.delete(path);
+                }
+                await refreshWorkspaceAction(path, { announce: false });
+                announceWorkspaceActionStatus(action, context, "success", path);
+                break;
+              case "verify-surface":
+                await runWorkspaceVerificationAction(path, "surface", { announce: false, context });
+                break;
+              case "verify-browser":
+                await runWorkspaceVerificationAction(path, "browser", { announce: false, context });
+                break;
+              case "remove": {
+                const response = await fetch("/api/workspaces/remove", {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json"
+                  },
+                  body: JSON.stringify({ path })
+                });
+                const payload = await response.json();
+                if (payload.error) {
+                  appendScanEntry({
+                    title: "Workspace removal",
+                    meta: "error",
+                    detail: payload.error.message
+                  });
+                  setScanStatus("error");
+                  announceWorkspaceActionStatus(action, context, "error", path, payload.error.message);
+                  return;
+                }
+                await refreshConsole();
+                announceWorkspaceActionStatus(action, context, "success", path);
+                break;
+              }
+            }
+          } catch (error) {
+            announceWorkspaceActionStatus(
+              action,
+              context,
+              "error",
+              path,
+              error?.message ?? workspaceActionStatusSpec(action, context, "error", path).detail
+            );
+          } finally {
+            setButtonBusy(item, false);
+          }
+        });
+      }
+    };
+
+    const loadRepositoryState = async (path, activePath) => {
+      const identifier = path === activePath ? "current" : encodeRepositoryId(path);
+      const [doctorResponse, pushPreviewResponse, auditResponse] = await Promise.all([
+        fetch(`/api/repositories/${identifier}/doctor`),
+        fetch(`/api/repositories/${identifier}/push-preview`),
+        fetch(`/api/repositories/${identifier}/audit`)
+      ]);
+
+      const [doctorPayload, pushPreviewPayload, auditPayload] = await Promise.all([
+        doctorResponse.json(),
+        pushPreviewResponse.json(),
+        auditResponse.json()
+      ]);
+
+      return {
+        doctor: doctorPayload,
+        push_preview: pushPreviewPayload,
+        audit: auditPayload
+      };
+    };
+
+    const loadRepositoryAudit = async (path, activePath) => {
+      const identifier = path === activePath ? "current" : encodeRepositoryId(path);
+      const response = await fetch(`/api/repositories/${identifier}/audit`);
+      return response.json();
+    };
+
+    const safeFileSegment = (value) =>
+      String(value ?? "repo")
+        .trim()
+        .replace(/[^a-z0-9._-]+/gi, "-")
+        .replace(/^-+|-+$/g, "")
+        .toLowerCase() || "repo";
+
+    const downloadArtifact = (filename, body, mimeType) => {
+      const blob = new Blob([body], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    };
+
+    const markdownTable = (headers, rows) => {
+      const headerLine = `| ${headers.join(" | ")} |`;
+      const separatorLine = `| ${headers.map(() => "---").join(" | ")} |`;
+      const bodyLines = rows.map((row) => `| ${row.join(" | ")} |`);
+      return [headerLine, separatorLine, ...bodyLines].join("\n");
+    };
+
+    const serializeAuditEntry = (entry) => ({
+      sequence: entry.sequence ?? null,
+      outcome: entry.outcome ?? "unknown",
+      state: classifyAuditEntry(entry),
+      blocks: entry.blocks ?? 0,
+      warnings: entry.warnings ?? 0,
+      findings: entry.findings ?? 0,
+      verdict: entry.verdict ?? "unknown",
+      timestamp_unix: entry.timestamp_unix ?? null,
+      relative_time: formatAuditTime(entry.timestamp_unix),
+      detail: entry.detail ?? ""
+    });
+
+    const renderWorkspace = (workspaces, repo, pushPreview) => {
+      const list = document.getElementById("workspace-list");
+      if (!list || !repo) return;
+
+      const verdict = pushPreview?.decision?.verdict ?? "allow";
+      const commitsAhead = pushPreview?.commits_ahead ?? 0;
+      const scannedFiles = pushPreview?.report?.scanned_files ?? 0;
+      const filteredWorkspaces = workspaces.filter((workspace) => {
+        const haystack = [
+          workspace.name,
+          workspace.path,
+          workspace.summary,
+          workspace.doctor_summary,
+          workspace.verdict_label
+        ]
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(workspaceQuery);
+      });
+      list.innerHTML = filteredWorkspaces.length > 0
+        ? filteredWorkspaces
+        .map((workspace) => {
+          const active = workspace.selected;
+          const label = workspace.verdict_label ?? (active
+            ? verdict === "block"
+              ? "Blocked"
+              : verdict === "warn"
+                ? "Warnings"
+                : "Push Ready"
+            : "Pinned workspace");
+          const summary = workspace.summary ?? (active
+            ? `${commitsAhead} commits ahead • ${scannedFiles} files in scope`
+            : workspace.path);
+          const refreshLine = workspace.cached === false
+            ? "No cached posture yet"
+            : formatRefreshTime(workspace.last_refreshed_unix);
+          return `
+            <article class="repo-item ${active ? "is-active" : ""}" data-workspace-path="${workspace.path}">
+              <header>
+                <strong>${workspace.name}</strong>
+                <span class="repo-tone ${workspace.tone ?? (active ? workspaceTone(verdict) : "safe")}"></span>
+              </header>
+              <p>${label}</p>
+              <small>${summary}</small>
+              <small style="display:block;margin-top:4px;opacity:.64;">${workspace.doctor_summary ?? workspace.path}</small>
+              <small style="display:block;margin-top:4px;opacity:.52;">${refreshLine}</small>
+              <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+                ${renderWorkspaceActionButtons(workspace, { context: "rail", activePath: repo.path, workspaceCount: workspaces.length })}
+              </div>
+            </article>
+          `;
+        })
+        .join("")
+        : `
+          <article class="repo-item">
+            <header>
+              <strong>No pinned repos match</strong>
+              <span class="repo-tone review"></span>
+            </header>
+            <p>${workspaceQuery || "query"}</p>
+            <small>Try a repo name, branch summary, or path fragment.</small>
+          </article>
+        `;
+      bindWorkspaceActionButtons(list, { context: "rail" });
+    };
+
+    const renderComparisonSets = (comparisonSetPayload) => {
+      const list = document.getElementById("comparison-set-list");
+      if (!list) return;
+
+      const sets = (comparisonSetPayload?.sets ?? []).filter((set) => {
+        const haystack = [set.name, ...(set.paths ?? [])].join(" ").toLowerCase();
+        return haystack.includes(workspaceQuery);
+      });
+      const selectedName = comparisonSetPayload?.selected_name ?? null;
+
+      if (sets.length === 0) {
+        list.innerHTML = `
+          <article class="repo-item">
+            <header>
+              <strong>No saved sets</strong>
+              <span class="repo-tone safe"></span>
+            </header>
+            <p>Save the current comparison board</p>
+            <small>Named sets let the console restore the same multi-repo view on reload.</small>
+          </article>
+        `;
+        return;
+      }
+
+      list.innerHTML = sets
+        .map(
+          (set) => `
+            <article class="repo-item ${selectedName === set.name ? "is-active" : ""}">
+              <header>
+                <strong>${set.name}</strong>
+                <span class="repo-tone ${selectedName === set.name ? "review" : "safe"}"></span>
+              </header>
+              <p>${set.count} repos</p>
+              <small>${set.paths.join(" • ")}</small>
+              <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+                <button class="button secondary comparison-set-load" type="button" data-comparison-set-name="${set.name}" style="min-height:34px;padding:0 12px;font-size:.8rem;">${selectedName === set.name ? "Loaded" : "Load"}</button>
+                <button class="button secondary comparison-set-remove" type="button" data-comparison-set-name="${set.name}" style="min-height:34px;padding:0 12px;font-size:.8rem;">Remove</button>
+              </div>
+            </article>
+          `
+        )
+        .join("");
+
+      for (const item of list.querySelectorAll(".comparison-set-load")) {
+        item.addEventListener("click", async () => {
+          const name = item.getAttribute("data-comparison-set-name");
+          if (!name) return;
+          setButtonBusy(item, true);
+          try {
+            await runComparisonSetAction("load", { name });
+          } catch (error) {
+            announceConsoleActionStatus("comparison-set-load", "error", error?.message);
+          } finally {
+            setButtonBusy(item, false);
+          }
+        });
+      }
+
+      for (const item of list.querySelectorAll(".comparison-set-remove")) {
+        item.addEventListener("click", async () => {
+          const name = item.getAttribute("data-comparison-set-name");
+          if (!name) return;
+          setButtonBusy(item, true);
+          try {
+            await runComparisonSetAction("remove", { name });
+          } catch (error) {
+            announceConsoleActionStatus("comparison-set-remove", "error", error?.message);
+          } finally {
+            setButtonBusy(item, false);
+          }
+        });
+      }
+    };
+
+    const summarizeComparisonState = (data, workspace) => {
+      const pushPreview = data?.push_preview ?? {};
+      const doctor = data?.doctor ?? {};
+      const audit = data?.audit ?? {};
+      const auditEntries = filterAuditEntriesByWindow(audit.entries ?? [], historyWindow);
+      const doctorSummary = doctor.summary ?? {};
+      const blocks = pushPreview?.decision?.blocking_findings?.length ?? 0;
+      const warnings = pushPreview?.decision?.warning_findings?.length ?? 0;
+      const latestAudit = [...auditEntries].slice(-1)[0];
+      const trend = summarizeAuditTrend(auditEntries);
+      const delta = summarizeAuditDelta(latestAudit, pushPreview);
+      return {
+        branch: workspace?.branch ?? pushPreview.branch ?? "unknown",
+        upstream: workspace?.upstream ?? pushPreview.upstream ?? "<none>",
+        verdict: workspace?.verdict_label ?? "Unknown",
+        commitsAhead: pushPreview?.commits_ahead ?? 0,
+        scannedFiles: pushPreview?.report?.scanned_files ?? 0,
+        blocks,
+        warnings,
+        doctorPass: doctorSummary.pass ?? 0,
+        doctorReview: (doctorSummary.warn ?? 0) + (doctorSummary.fail ?? 0),
+        auditOutcome: latestAudit?.outcome ?? "no audit yet",
+        auditTimestamp: latestAudit?.timestamp_unix ?? null,
+        refreshed: workspace?.last_refreshed_unix ?? 0,
+        trend,
+        delta,
+        historyCount: auditEntries.length
+      };
+    };
+
+    const classifyAuditEntry = (entry) => {
+      if (!entry) return "idle";
+      if ((entry.blocks ?? 0) > 0 || entry.outcome === "blocked") return "blocked";
+      if (entry.outcome === "push-failed") return "failed";
+      if ((entry.warnings ?? 0) > 0 || entry.verdict === "warn") return "review";
+      if (entry.outcome === "no-op") return "idle";
+      return "success";
+    };
+
+    const trendScore = (state) => {
+      switch (state) {
+        case "blocked":
+        case "failed":
+          return -1;
+        case "review":
+          return 0;
+        case "success":
+          return 1;
+        default:
+          return 0;
+      }
+    };
+
+    const summarizeAuditTrend = (entries) => {
+      const recent = [...entries].slice(-5).map((entry) => classifyAuditEntry(entry));
+      const actionableScores = [...entries]
+        .map((entry) => classifyAuditEntry(entry))
+        .filter((state) => state !== "idle")
+        .slice(-3)
+        .map((state) => trendScore(state));
+      const counts = recent.reduce(
+        (accumulator, state) => {
+          accumulator[state] = (accumulator[state] ?? 0) + 1;
+          return accumulator;
+        },
+        { blocked: 0, failed: 0, review: 0, success: 0, idle: 0 }
+      );
+
+      let label = "limited history";
+      if (actionableScores.length >= 2) {
+        const first = actionableScores[0];
+        const last = actionableScores[actionableScores.length - 1];
+        if (last > first) {
+          label = "improving";
+        } else if (last < first) {
+          label = "regressing";
+        } else if (actionableScores.every((score) => score === last)) {
+          label = "steady";
+        } else {
+          label = "mixed";
+        }
+      } else if (recent.length > 0) {
+        label = "recent only";
+      }
+
+      return { recent, counts, label };
+    };
+
+    const summarizeAuditDelta = (latestAudit, pushPreview) => {
+      const currentBlocks = pushPreview?.decision?.blocking_findings?.length ?? 0;
+      const currentWarnings = pushPreview?.decision?.warning_findings?.length ?? 0;
+      const previousBlocks = latestAudit?.blocks ?? 0;
+      const previousWarnings = latestAudit?.warnings ?? 0;
+      const blocksDelta = currentBlocks - previousBlocks;
+      const warningsDelta = currentWarnings - previousWarnings;
+      const direction =
+        blocksDelta < 0 || (blocksDelta === 0 && warningsDelta < 0)
+          ? "improved"
+          : blocksDelta > 0 || warningsDelta > 0
+            ? "drifted"
+            : "steady";
+
+      return {
+        blocksDelta,
+        warningsDelta,
+        direction
+      };
+    };
+
+    const formatAuditDelta = (delta) => {
+      const blockText =
+        delta.blocksDelta === 0
+          ? "no block change"
+          : `${delta.blocksDelta > 0 ? "+" : ""}${delta.blocksDelta} blocks`;
+      const warningText =
+        delta.warningsDelta === 0
+          ? "no warning change"
+          : `${delta.warningsDelta > 0 ? "+" : ""}${delta.warningsDelta} warnings`;
+      return `${delta.direction} • ${blockText} • ${warningText}`;
+    };
+
+    const workspaceCacheIsStale = (workspace, autoRefreshSeconds) => {
+      if (!workspace?.last_refreshed_unix) return true;
+      const age = Math.max(0, Math.floor(Date.now() / 1000) - workspace.last_refreshed_unix);
+      if (!autoRefreshSeconds || autoRefreshSeconds <= 0) {
+        return age >= 3600;
+      }
+      return age >= autoRefreshSeconds * 2;
+    };
+
+    const summarizeFleetWorkspace = (workspace, auditEntries, autoRefreshSeconds) => {
+      const filteredAudit = filterAuditEntriesByWindow(auditEntries ?? [], historyWindow);
+      const recent = [...filteredAudit].slice(-5);
+      const blockedRecent = recent.filter((entry) => classifyAuditEntry(entry) === "blocked" || classifyAuditEntry(entry) === "failed").length;
+      const reviewRecent = recent.filter((entry) => classifyAuditEntry(entry) === "review").length;
+      const stale = workspaceCacheIsStale(workspace, autoRefreshSeconds);
+      const active = workspace.selected === true;
+      const blocked = workspace.tone === "blocked";
+      const review = workspace.tone === "review";
+
+      let lane = "ready";
+      if (blocked || blockedRecent > 0 || stale) {
+        lane = "needs-action";
+      } else if (review || reviewRecent > 0) {
+        lane = "watchlist";
+      }
+
+      return {
+        lane,
+        stale,
+        blockedRecent,
+        reviewRecent,
+        filteredAuditCount: filteredAudit.length,
+        latestAudit: [...filteredAudit].slice(-1)[0] ?? null,
+        active,
+        blocked,
+        review
+      };
+    };
+
+    const renderFleetBoard = (workspaces, bridge) => {
+      const overview = document.getElementById("fleet-overview");
+      const board = document.getElementById("fleet-board");
+      const status = document.getElementById("fleet-status");
+      if (!overview || !board || !status) return;
+
+      const autoRefreshSeconds = bridge?.auto_refresh_seconds ?? 300;
+      const rows = workspaces.map((workspace) => ({
+        workspace,
+        summary: summarizeFleetWorkspace(
+          workspace,
+          fleetAuditState.get(workspace.path)?.entries ?? [],
+          autoRefreshSeconds
+        )
+      })).filter(({ workspace, summary }) => {
+        const laneMatch = fleetLaneFilter === "all" || summary.lane === fleetLaneFilter;
+        const staleMatch = !fleetStaleOnly || summary.stale;
+        const searchMatch = [
+          workspace.name,
+          workspace.path,
+          workspace.summary,
+          workspace.doctor_summary,
+          workspace.verdict_label
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(workspaceQuery);
+        return laneMatch && staleMatch && searchMatch;
+      });
+
+      const lanes = {
+        "needs-action": rows.filter((row) => row.summary.lane === "needs-action"),
+        watchlist: rows.filter((row) => row.summary.lane === "watchlist"),
+        ready: rows.filter((row) => row.summary.lane === "ready")
+      };
+
+      const staleCount = rows.filter((row) => row.summary.stale).length;
+      overview.innerHTML = `
+        <div class="fleet-metric">
+          <span>Needs action</span>
+          <strong>${lanes["needs-action"].length}</strong>
+        </div>
+        <div class="fleet-metric">
+          <span>Watchlist</span>
+          <strong>${lanes.watchlist.length}</strong>
+        </div>
+        <div class="fleet-metric">
+          <span>Ready</span>
+          <strong>${lanes.ready.length}</strong>
+        </div>
+        <div class="fleet-metric">
+          <span>Stale caches</span>
+          <strong>${staleCount}</strong>
+        </div>
+      `;
+
+      status.textContent = `${rows.length}/${workspaces.length} repos shown • ${historyWindow} window • ${staleCount} stale`;
+
+      const laneConfig = [
+        {
+          key: "needs-action",
+          title: "Needs action",
+          copy: "Repos with blockers, stale posture, or recent blocked activity."
+        },
+        {
+          key: "watchlist",
+          title: "Watchlist",
+          copy: "Repos with warnings, review posture, or noisy recent audit history."
+        },
+        {
+          key: "ready",
+          title: "Ready",
+          copy: "Repos that currently look healthy and recent."
+        }
+      ];
+
+      board.innerHTML = laneConfig
+        .map(({ key, title, copy }) => {
+          const laneRows = lanes[key]
+            .sort((left, right) => {
+              const leftWeight = (left.summary.blocked ? 3 : 0) + (left.summary.stale ? 2 : 0) + left.summary.blockedRecent;
+              const rightWeight = (right.summary.blocked ? 3 : 0) + (right.summary.stale ? 2 : 0) + right.summary.blockedRecent;
+              return rightWeight - leftWeight;
+            });
+
+          return `
+            <section class="fleet-column">
+              <header>
+                <h4>${title}</h4>
+                <p>${copy}</p>
+              </header>
+              <div class="fleet-list">
+                ${
+                  laneRows.length > 0
+                    ? laneRows
+                        .map(({ workspace, summary }) => `
+                          <article class="fleet-item">
+                            <header>
+                              <div>
+                                <h5>${workspace.name}</h5>
+                                <small class="detail-muted">${workspace.branch ?? "unknown"} → ${workspace.upstream ?? "<none>"}</small>
+                              </div>
+                              <span class="fleet-tag ${workspace.tone === "blocked" ? "blocked" : workspace.tone === "review" ? "review" : "safe"}">${workspace.verdict_label}</span>
+                            </header>
+                            <p class="detail-muted">${workspace.summary}</p>
+                            <small class="detail-muted">${workspace.doctor_summary}</small>
+                            <div class="fleet-tags">
+                              ${summary.active ? '<span class="fleet-tag safe">active target</span>' : ""}
+                              ${summary.stale ? '<span class="fleet-tag stale">stale cache</span>' : ""}
+                              ${summary.blockedRecent > 0 ? `<span class="fleet-tag blocked">${summary.blockedRecent} blocked recent</span>` : ""}
+                              ${summary.reviewRecent > 0 ? `<span class="fleet-tag review">${summary.reviewRecent} review recent</span>` : ""}
+                              ${
+                                summary.latestAudit
+                                  ? `<span class="fleet-tag ${classifyAuditEntry(summary.latestAudit) === "success" ? "safe" : classifyAuditEntry(summary.latestAudit) === "review" ? "review" : "blocked"}">last audit ${summary.latestAudit.outcome}</span>`
+                                  : `<span class="fleet-tag stale">no recent audit</span>`
+                              }
+                            </div>
+                            <small class="detail-muted">
+                              ${formatRefreshTime(workspace.last_refreshed_unix)} • ${summary.filteredAuditCount} audit entries in scope
+                            </small>
+                            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                              ${renderWorkspaceActionButtons(workspace, { context: "fleet", activePath: workspaces.find((entry) => entry.selected)?.path ?? null })}
+                            </div>
+                          </article>
+                        `)
+                        .join("")
+                    : `
+                      <article class="fleet-item">
+                        <header>
+                          <div>
+                            <h5>No repos here</h5>
+                            <small class="detail-muted">${title} is empty for the current filters.</small>
+                          </div>
+                          <span class="fleet-tag safe">clear</span>
+                        </header>
+                      </article>
+                    `
+                }
+              </div>
+            </section>
+          `;
+        })
+        .join("");
+      bindWorkspaceActionButtons(board, { context: "fleet" });
+    };
+
+    const comparisonExportPayload = (workspaces, activePath) => {
+      const selected = workspaces.filter((workspace) => comparisonPaths.has(workspace.path));
+      return {
+        generated_at: new Date().toISOString(),
+        history_window: historyWindow,
+        active_repository_path: activePath,
+        compared_repositories: selected.map((workspace) => {
+          const comparison = comparisonState.get(workspace.path);
+          const summary = summarizeComparisonState(comparison, workspace);
+          const auditEntries = filterAuditEntriesByWindow(
+            comparison?.audit?.entries ?? [],
+            historyWindow
+          ).map(serializeAuditEntry);
+          return {
+            name: workspace.name,
+            path: workspace.path,
+            active_target: workspace.path === activePath,
+            verdict_label: workspace.verdict_label,
+            summary: workspace.summary,
+            doctor_summary: workspace.doctor_summary,
+            branch: summary.branch,
+            upstream: summary.upstream,
+            scope: {
+              commits_ahead: summary.commitsAhead,
+              scanned_files: summary.scannedFiles
+            },
+            push_posture: {
+              blockers: summary.blocks,
+              warnings: summary.warnings
+            },
+            doctor_posture: {
+              pass: summary.doctorPass,
+              review: summary.doctorReview
+            },
+            audit: {
+              recent_outcome: summary.auditOutcome,
+              recent_timestamp_unix: summary.auditTimestamp,
+              history_count: summary.historyCount,
+              trend: summary.trend,
+              delta: summary.delta,
+              entries: auditEntries
+            },
+            cache: {
+              last_refreshed_unix: workspace.last_refreshed_unix ?? null
+            }
+          };
+        })
+      };
+    };
+
+    const comparisonExportMarkdown = (payload) => {
+      const lines = [
+        "# Wolfence Comparison Export",
+        "",
+        `Generated: ${payload.generated_at}`,
+        `History window: ${payload.history_window}`,
+        `Active repository: ${payload.active_repository_path ?? "n/a"}`,
+        ""
+      ];
+
+      if (payload.compared_repositories.length === 0) {
+        lines.push("No compared repositories were selected.");
+        return lines.join("\n");
+      }
+
+      lines.push(
+        markdownTable(
+          [
+            "Repository",
+            "Branch",
+            "Verdict",
+            "Push posture",
+            "Doctor",
+            "Recent audit",
+            "History delta"
+          ],
+          payload.compared_repositories.map((repo) => [
+            repo.name,
+            `${repo.branch} → ${repo.upstream}`,
+            repo.verdict_label ?? "Unknown",
+            `${repo.push_posture.blockers} blockers / ${repo.push_posture.warnings} warnings`,
+            `${repo.doctor_posture.pass} pass / ${repo.doctor_posture.review} review`,
+            repo.audit.recent_outcome,
+            formatAuditDelta(repo.audit.delta)
+          ])
+        ),
+        ""
+      );
+
+      for (const repo of payload.compared_repositories) {
+        lines.push(`## ${repo.name}`, "");
+        lines.push(`- Path: \`${repo.path}\``);
+        lines.push(`- Summary: ${repo.summary ?? "n/a"}`);
+        lines.push(`- Doctor summary: ${repo.doctor_summary ?? "n/a"}`);
+        lines.push(`- Refresh: ${formatRefreshTime(repo.cache.last_refreshed_unix)}`);
+        lines.push(`- Trend: ${repo.audit.trend.label}`);
+        lines.push("");
+      }
+
+      return lines.join("\n");
+    };
+
+    const dossierExportPayload = (workspace, data) => {
+      if (!workspace || !data) return null;
+      const pushPreview = data.push_preview ?? {};
+      const doctor = data.doctor ?? {};
+      const doctorSummary = doctor.summary ?? {};
+      const filteredAudit = filterAuditEntriesByWindow(data.audit?.entries ?? [], historyWindow);
+      const latestAudit = [...filteredAudit].slice(-1)[0];
+      return {
+        generated_at: new Date().toISOString(),
+        history_window: historyWindow,
+        repository: {
+          name: workspace.name,
+          path: workspace.path,
+          branch: workspace.branch ?? pushPreview.branch ?? "unknown",
+          upstream: workspace.upstream ?? pushPreview.upstream ?? "<none>",
+          verdict_label: workspace.verdict_label,
+          summary: workspace.summary,
+          doctor_summary: workspace.doctor_summary,
+          last_refreshed_unix: workspace.last_refreshed_unix ?? null
+        },
+        current_posture: {
+          commits_ahead: pushPreview.commits_ahead ?? 0,
+          scanned_files: pushPreview.report?.scanned_files ?? 0,
+          blockers: pushPreview.decision?.blocking_findings?.length ?? 0,
+          warnings: pushPreview.decision?.warning_findings?.length ?? 0,
+          doctor_pass: doctorSummary.pass ?? 0,
+          doctor_review: (doctorSummary.warn ?? 0) + (doctorSummary.fail ?? 0)
+        },
+        audit: {
+          latest_outcome: latestAudit?.outcome ?? "no audit yet",
+          latest_timestamp_unix: latestAudit?.timestamp_unix ?? null,
+          entries: filteredAudit.map(serializeAuditEntry)
+        }
+      };
+    };
+
+    const dossierExportMarkdown = (payload) => {
+      if (!payload) return "# Wolfence Dossier Export\n\nNo inspected repository was loaded.";
+      return [
+        "# Wolfence Dossier Export",
+        "",
+        `Generated: ${payload.generated_at}`,
+        `History window: ${payload.history_window}`,
+        `Repository: ${payload.repository.name}`,
+        `Path: \`${payload.repository.path}\``,
+        "",
+        "## Current posture",
+        "",
+        `- Branch: ${payload.repository.branch} → ${payload.repository.upstream}`,
+        `- Verdict: ${payload.repository.verdict_label ?? "Unknown"}`,
+        `- Summary: ${payload.repository.summary ?? "n/a"}`,
+        `- Push posture: ${payload.current_posture.blockers} blockers / ${payload.current_posture.warnings} warnings`,
+        `- Doctor posture: ${payload.current_posture.doctor_pass} pass / ${payload.current_posture.doctor_review} review`,
+        `- Scope: ${payload.current_posture.commits_ahead} commits ahead / ${payload.current_posture.scanned_files} files`,
+        "",
+        "## Recent audit timeline",
+        "",
+        ...(payload.audit.entries.length > 0
+          ? payload.audit.entries.map(
+              (entry) =>
+                `- #${entry.sequence} • ${entry.outcome} • ${entry.blocks} blocks • ${entry.warnings} warnings • ${entry.relative_time}`
+            )
+          : ["- No audit history in the selected window."])
+      ].join("\n");
+    };
+
+    const renderComparisonBoard = (workspaces, comparisonState, activePath) => {
+      const grid = document.getElementById("comparison-grid");
+      const status = document.getElementById("comparison-status");
+      if (!grid || !status) return;
+
+      const selected = workspaces.filter((workspace) => comparisonPaths.has(workspace.path));
+      if (selected.length === 0) {
+        status.textContent = "no compared repos";
+        grid.innerHTML = `
+          <article class="comparison-column">
+            <header>
+              <h4>Comparison board</h4>
+              <div class="comparison-meta">
+                <span>idle</span>
+                <span>0 repos</span>
+              </div>
+            </header>
+            <div class="comparison-stats">
+              <div class="comparison-stat">
+                <span>Hint</span>
+                <strong>Add pinned repos into comparison from the rail.</strong>
+              </div>
+            </div>
+          </article>
+        `;
+        return;
+      }
+
+      status.textContent = `${selected.length} repos compared • ${historyWindow}`;
+      grid.innerHTML = selected
+        .map((workspace) => {
+          const comparison = comparisonState.get(workspace.path);
+          const summary = summarizeComparisonState(comparison, workspace);
+          return `
+            <article class="comparison-column">
+              <header>
+                <h4>${workspace.name}</h4>
+                <div class="comparison-meta">
+                  <span>${workspace.path === activePath ? "active target" : "inspection only"}</span>
+                  <span>${summary.verdict}</span>
+                </div>
+              </header>
+              <div class="comparison-stats">
+                <div class="comparison-stat">
+                  <span>Branch</span>
+                  <strong>${summary.branch} → ${summary.upstream}</strong>
+                </div>
+                <div class="comparison-stat">
+                  <span>Push posture</span>
+                  <strong>${summary.blocks} blockers • ${summary.warnings} warnings</strong>
+                </div>
+                <div class="comparison-stat">
+                  <span>Scope</span>
+                  <strong>${summary.commitsAhead} commits ahead • ${summary.scannedFiles} files</strong>
+                </div>
+                <div class="comparison-stat">
+                  <span>Doctor</span>
+                  <strong>${summary.doctorPass} pass • ${summary.doctorReview} review</strong>
+                </div>
+                <div class="comparison-stat">
+                  <span>Recent audit</span>
+                  <strong>${summary.auditOutcome}</strong>
+                  <small class="detail-muted">Last audit: ${formatAuditTime(summary.auditTimestamp)}</small>
+                </div>
+                <div class="comparison-stat">
+                  <span>History delta</span>
+                  <strong>${formatAuditDelta(summary.delta)}</strong>
+                </div>
+                <div class="comparison-stat">
+                  <span>Trend</span>
+                  <strong>${summary.trend.label}</strong>
+                  <div class="trend-strip">
+                    ${
+                      summary.trend.recent.length > 0
+                        ? summary.trend.recent
+                            .map((state) => `<span class="trend-chip ${state}" title="${state}"></span>`)
+                            .join("")
+                        : `<span class="detail-muted">No recent audit history</span>`
+                    }
+                  </div>
+                  <div class="trend-legend">
+                    <span>${summary.trend.counts.success} clean</span>
+                    <span>${summary.trend.counts.review} review</span>
+                    <span>${summary.trend.counts.blocked + summary.trend.counts.failed} blocked</span>
+                    <span>${summary.trend.counts.idle} idle</span>
+                  </div>
+                </div>
+                <div class="comparison-stat">
+                  <span>Window</span>
+                  <strong>${historyWindow}</strong>
+                  <small class="detail-muted">${summary.historyCount} audit entries in scope</small>
+                </div>
+                <div class="comparison-stat">
+                  <span>Refresh</span>
+                  <strong>${formatRefreshTime(summary.refreshed)}</strong>
+                </div>
+                <div class="comparison-stat">
+                  <span>History</span>
+                  <strong><a href="${historyHref(workspace.path)}">Open full history</a></strong>
+                </div>
+              </div>
+            </article>
+          `;
+        })
+        .join("");
+    };
+
+    const renderWorkspaceDossier = (workspace, data, activePath) => {
+      const dossier = document.getElementById("workspace-dossier");
+      const status = document.getElementById("workspace-dossier-status");
+      if (!dossier || !status) return;
+
+      if (!workspace || !data) {
+        status.textContent = "idle";
+        dossier.innerHTML = `
+          <article class="audit-item">
+            <div class="audit-line">
+              <strong>No inspected workspace</strong>
+              <span class="detail-muted">idle</span>
+            </div>
+            <span class="detail-muted">Pick a pinned repo to load a deeper dossier here.</span>
+          </article>
+        `;
+        return;
+      }
+
+      const pushPreview = data.push_preview ?? {};
+      const doctor = data.doctor ?? {};
+      const audit = data.audit ?? {};
+      const filteredAudit = filterAuditEntriesByWindow(audit.entries ?? [], historyWindow);
+      const doctorSummary = doctor.summary ?? {};
+      const latestAudit = [...filteredAudit].slice(-1)[0];
+      const latestOutcome = latestAudit?.outcome ?? "no audit yet";
+      const latestTime = latestAudit?.timestamp_unix ?? null;
+      const blocks = pushPreview?.decision?.blocking_findings?.length ?? 0;
+      const warnings = pushPreview?.decision?.warning_findings?.length ?? 0;
+      const commitsAhead = pushPreview?.commits_ahead ?? 0;
+      const scannedFiles = pushPreview?.report?.scanned_files ?? 0;
+      const branch = workspace.branch ?? pushPreview.branch ?? "unknown";
+      const upstream = workspace.upstream ?? pushPreview.upstream ?? "<none>";
+      const isActive = workspace.path === activePath;
+      const historyList = [...filteredAudit].slice(-6).reverse();
+      const verification = workspace.verification ?? {};
+      const verificationSupported = verification.supported !== false;
+
+      status.textContent = `${isActive ? "active target" : "inspection only"} • ${historyWindow}`;
+      dossier.innerHTML = `
+        <article class="audit-item">
+          <div class="audit-line">
+            <strong>${workspace.name}</strong>
+            <span class="detail-muted">${isActive ? "current push target" : "pinned repo"}</span>
+          </div>
+          <span class="detail-muted">${workspace.path}</span>
+        </article>
+        <article class="audit-item">
+          <div class="audit-line">
+            <strong>Branch posture</strong>
+            <span class="detail-muted">${branch} → ${upstream}</span>
+          </div>
+          <span class="detail-muted">${workspace.verdict_label} • ${workspace.summary}</span>
+        </article>
+        <article class="audit-item">
+          <div class="audit-line">
+            <strong>Push dossier</strong>
+            <span class="detail-muted">${blocks} blockers • ${warnings} warnings</span>
+          </div>
+          <span class="detail-muted">${commitsAhead} commits ahead • ${scannedFiles} files in scope • ${formatRefreshTime(workspace.last_refreshed_unix)}</span>
+        </article>
+        <article class="audit-item">
+          <div class="audit-line">
+            <strong>Doctor posture</strong>
+            <span class="detail-muted">${doctorSummary.pass ?? 0} pass • ${(doctorSummary.warn ?? 0) + (doctorSummary.fail ?? 0)} review</span>
+          </div>
+          <span class="detail-muted">${workspace.doctor_summary}</span>
+        </article>
+        <article class="audit-item">
+          <div class="audit-line">
+            <strong>Recent audit</strong>
+            <span class="detail-muted">${latestOutcome}</span>
+          </div>
+          <span class="detail-muted">Most recent recorded audit timestamp: ${formatAuditTime(latestTime)}</span>
+        </article>
+        <article class="audit-item">
+          <div class="audit-line">
+            <strong>History window</strong>
+            <span class="detail-muted">${historyWindow}</span>
+          </div>
+          <span class="detail-muted">${filteredAudit.length} audit entries in scope for this repo.</span>
+        </article>
+        <article class="audit-item">
+          <div class="audit-line">
+            <strong>Verification posture</strong>
+            <span class="detail-muted">${verificationSupported ? "supported" : "not available here"}</span>
+          </div>
+          ${
+            verificationSupported
+              ? `
+                <span class="detail-muted">This pinned repo can run repo-local browser-console verification from the bridge.</span>
+                <div class="dense-list">
+                  ${renderVerificationRecordHtml("Smoke verification", verification.surface)}
+                  ${renderVerificationRecordHtml("Browser verification", verification.browser)}
+                </div>
+              `
+              : `<span class="detail-muted">This pinned repo does not contain a Wolfence browser console surface, so repo-local UI verification is unavailable.</span>`
+          }
+        </article>
+        <article class="audit-item">
+          <div class="audit-line">
+            <strong>Recent timeline</strong>
+            <span class="detail-muted">${historyList.length} shown</span>
+          </div>
+          ${
+            historyList.length > 0
+              ? `<div class="dense-list">${historyList
+                  .map(
+                    (entry) => `
+                      <article class="audit-item" style="padding:10px 0 0;">
+                        <div class="audit-line">
+                          <strong>#${entry.sequence}</strong>
+                          <span class="detail-muted">${classifyAuditEntry(entry)} • ${formatAuditTime(entry.timestamp_unix)}</span>
+                        </div>
+                        <span class="detail-muted">${entry.outcome} • ${entry.blocks ?? 0} blocks • ${entry.warnings ?? 0} warnings</span>
+                      </article>
+                    `
+                  )
+                  .join("")}</div>`
+              : `<span class="detail-muted">No audit history is available in the selected window.</span>`
+          }
+        </article>
+        <article class="audit-item">
+          <div class="audit-line">
+            <strong>Workspace actions</strong>
+            <span class="detail-muted">${isActive ? "already active" : "inspection mode"}</span>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            ${renderWorkspaceActionButtons(workspace, { context: "dossier", activePath })}
+            <button class="button secondary dossier-export-md" type="button" data-workspace-path="${workspace.path}" style="min-height:34px;padding:0 12px;font-size:.8rem;">Export Markdown</button>
+            <button class="button secondary dossier-export-json" type="button" data-workspace-path="${workspace.path}" style="min-height:34px;padding:0 12px;font-size:.8rem;">Export JSON</button>
+            <a class="button secondary" href="${historyHref(workspace.path)}" style="min-height:34px;padding:0 12px;font-size:.8rem;">Full history</a>
+          </div>
+        </article>
+      `;
+      bindWorkspaceActionButtons(dossier, { context: "dossier" });
+
+      const exportMarkdownButton = dossier.querySelector(".dossier-export-md");
+      if (exportMarkdownButton) {
+        exportMarkdownButton.addEventListener("click", () => {
+          const payload = dossierExportPayload(workspace, data);
+          downloadArtifact(
+            `wolfence-dossier-${safeFileSegment(workspace.name)}-${safeFileSegment(historyWindow)}.md`,
+            dossierExportMarkdown(payload),
+            "text/markdown;charset=utf-8"
+          );
+          announceConsoleActionStatus("dossier-export", "success", `Downloaded Markdown for ${workspace.name} (${historyWindow}).`);
+        });
+      }
+
+      const exportJsonButton = dossier.querySelector(".dossier-export-json");
+      if (exportJsonButton) {
+        exportJsonButton.addEventListener("click", () => {
+          const payload = dossierExportPayload(workspace, data);
+          downloadArtifact(
+            `wolfence-dossier-${safeFileSegment(workspace.name)}-${safeFileSegment(historyWindow)}.json`,
+            JSON.stringify(payload, null, 2),
+            "application/json;charset=utf-8"
+          );
+          announceConsoleActionStatus("dossier-export", "success", `Downloaded JSON for ${workspace.name} (${historyWindow}).`);
+        });
+      }
+
+    };
+
+    const renderFindings = (pushPreview) => {
+      const list = document.getElementById("findings-list");
+      if (!list || !pushPreview?.decision) return;
+
+      const blocking = pushPreview.decision.blocking_findings ?? [];
+      const warning = pushPreview.decision.warning_findings ?? [];
+      const items = [...blocking, ...warning].map((entry) => entry.finding ?? entry);
+
+      if (items.length === 0) {
+        list.innerHTML = `
+          <article class="finding">
+            <div class="finding-line">
+              <span class="badge info">info</span>
+              <code>&lt;none&gt;</code>
+            </div>
+            <strong>No active findings in the current outbound scope.</strong>
+          </article>
+        `;
+        return;
+      }
+
+      list.innerHTML = items
+        .map((finding) => {
+          const location = finding.line
+            ? `${finding.file}:${finding.line}`
+            : finding.file ?? "<no file>";
+          const level = severityLabel(finding.severity);
+          return `
+            <article class="finding">
+              <div class="finding-line">
+                <span class="badge ${badgeClass(level)}">${level}</span>
+                <code>${location}</code>
+              </div>
+              <strong>${finding.title}</strong>
+            </article>
+          `;
+        })
+        .join("");
+    };
+
+    const renderDoctor = (doctor) => {
+      const list = document.getElementById("doctor-list");
+      if (!list || !doctor?.checks) return;
+
+      const ordered = [...doctor.checks].sort((left, right) => {
+        const rank = { fail: 0, warn: 1, pass: 2, info: 3 };
+        return (rank[left.status] ?? 9) - (rank[right.status] ?? 9);
+      });
+
+      list.innerHTML = ordered
+        .slice(0, 4)
+        .map(
+          (check) => `
+            <article class="doctor-item">
+              <div class="doctor-line">
+                <strong>${check.name}</strong>
+                <span class="detail-muted">${check.status}</span>
+              </div>
+              <span class="detail-muted">${check.detail}</span>
+            </article>
+          `
+        )
+        .join("");
+    };
+
+    const renderAudit = (audit) => {
+      const list = document.getElementById("audit-list");
+      if (!list || !audit?.entries) return;
+
+      const filtered = filterAuditEntriesByWindow(audit.entries, historyWindow);
+      list.innerHTML = filtered
+        .slice(-3)
+        .reverse()
+        .map(
+          (entry) => `
+            <article class="audit-item">
+              <div class="audit-line">
+                <strong>#${entry.sequence}</strong>
+                <span class="detail-muted">${entry.outcome} • ${formatAuditTime(entry.timestamp_unix)}</span>
+              </div>
+              <span class="detail-muted">${entry.detail ?? "Local audit entry recorded."}</span>
+            </article>
+          `
+        )
+        .join("");
+
+      if (filtered.length === 0) {
+        list.innerHTML = `
+          <article class="audit-item">
+            <div class="audit-line">
+              <strong>No audit activity</strong>
+              <span class="detail-muted">${historyWindow}</span>
+            </div>
+            <span class="detail-muted">No audit entries fall inside the current history window.</span>
+          </article>
+        `;
+      }
+    };
+
+    const renderPolicy = (config, receiptPolicy) => {
+      const list = document.getElementById("policy-list");
+      if (!list) return;
+
+      const ignorePaths = (config?.ignore_paths ?? []).join(", ") || "None";
+      const signed = receiptPolicy?.require_signed_receipts ? "required" : "not required";
+
+      list.innerHTML = `
+        <article class="finding">
+          <div class="finding-line">
+            <strong>Policy mode</strong>
+            <span class="detail-muted">${config?.mode ?? "unset"}</span>
+          </div>
+          <p class="detail-muted">Source: <code>.wolfence/config.toml</code></p>
+        </article>
+        <article class="finding">
+          <div class="finding-line">
+            <strong>Receipt signature policy</strong>
+            <span class="detail-muted">${signed}</span>
+          </div>
+          <p class="detail-muted">Source: <code>.wolfence/policy/receipts.toml</code></p>
+        </article>
+        <article class="finding">
+          <div class="finding-line">
+            <strong>Repo exclusions</strong>
+            <span class="detail-muted">${ignorePaths}</span>
+          </div>
+          <p class="detail-muted">Current scan ignore paths resolved by the local bridge.</p>
+        </article>
+      `;
+    };
+
+    const renderBridge = (bridge) => {
+      const autoRefresh = document.getElementById("workspace-auto-refresh");
+      const verification = document.getElementById("bridge-verification");
+      if (!autoRefresh) return;
+      const seconds = bridge?.auto_refresh_seconds ?? 0;
+      autoRefresh.textContent =
+        seconds > 0
+          ? `Auto-refresh every ${seconds}s through the local bridge`
+          : "Auto-refresh disabled";
+
+      if (!verification) return;
+
+      const surface = bridge?.verification?.surface;
+      const browser = bridge?.verification?.browser;
+      const renderRecord = (label, record) => {
+        const html = renderVerificationRecordHtml(label, record);
+        return record ? html : html.replace(
+          "No persisted result yet for this repository.",
+          "No persisted result yet. Run the corresponding verification command locally."
+        );
+      };
+
+      verification.innerHTML = `
+        ${renderRecord("Smoke verification", surface)}
+        ${renderRecord("Browser verification", browser)}
+      `;
+    };
+
+    const renderSummary = (doctor, pushPreview, audit) => {
+      const pushText =
+        pushPreview?.decision?.verdict === "block"
+          ? "Blocked"
+          : pushPreview?.decision?.verdict === "warn"
+            ? "Needs review"
+            : "Safe";
+      const doctorText = doctor?.summary
+        ? `${doctor.summary.pass} pass / ${doctor.summary.warn + doctor.summary.fail} review`
+        : "Unavailable";
+      const findingsCount =
+        (pushPreview?.decision?.blocking_findings?.length ?? 0) +
+        (pushPreview?.decision?.warning_findings?.length ?? 0);
+      const blocks = pushPreview?.decision?.blocking_findings?.length ?? 0;
+      const warnings = pushPreview?.decision?.warning_findings?.length ?? 0;
+
+      const set = (id, value) => {
+        const element = document.getElementById(id);
+        if (element) element.textContent = value;
+      };
+
+      set("summary-push", pushText);
+      set("summary-doctor", doctorText);
+      set(
+        "summary-findings",
+        findingsCount === 0 ? "No findings" : `${blocks} blockers / ${warnings} warnings`
+      );
+      set("summary-audit", `${audit?.entries?.length ?? 0} recent decisions`);
+    };
+
+    const updateHero = (repo, pushPreview) => {
+      const repoPath = document.getElementById("repo-path");
+      const branchLine = document.getElementById("branch-line");
+      const heroCopy = document.getElementById("hero-copy");
+
+      if (repoPath) repoPath.textContent = repo?.path ?? repoPath.textContent;
+      if (branchLine) {
+        branchLine.textContent = `${repo?.branch ?? "unknown"} → ${repo?.upstream ?? "<none>"}`;
+      }
+      if (heroCopy && pushPreview?.status) {
+        heroCopy.innerHTML = `Current bridge state comes from <code>wolf doctor --json</code>, <code>wolf scan push --json</code>, and <code>wolf audit list --json</code>. This repo is currently in <code>${pushPreview.status}</code> preview status.`;
+      }
+    };
+
+    const renderScanActivity = (entries) => {
+      const list = document.getElementById("scan-activity");
+      if (!list) return;
+
+      if (entries.length === 0) {
+        list.innerHTML = "";
+        return;
+      }
+
+      list.innerHTML = entries
+        .slice(-6)
+        .reverse()
+        .map(
+          (entry) => `
+            <article class="audit-item">
+              <div class="audit-line">
+                <strong>${entry.title}</strong>
+                <span class="detail-muted">${entry.meta}</span>
+              </div>
+              <span class="detail-muted">${entry.detail}</span>
+            </article>
+          `
+        )
+        .join("");
+    };
+
+    const scanEntries = [];
+    const scanStatus = document.getElementById("scan-status");
+    const scanTrigger = document.getElementById("scan-trigger");
+    const pushTrigger = document.getElementById("push-trigger");
+    const verificationSurfaceTrigger = document.getElementById("verification-surface-trigger");
+    const verificationBrowserTrigger = document.getElementById("verification-browser-trigger");
+    const refreshAllTrigger = document.getElementById("workspace-refresh-all");
+    const comparisonClearTrigger = document.getElementById("comparison-clear");
+    const comparisonSaveCurrentTrigger = document.getElementById("comparison-save-current");
+    const comparisonExportMarkdownTrigger = document.getElementById("comparison-export-md");
+    const comparisonExportJsonTrigger = document.getElementById("comparison-export-json");
+    const historyWindowControls = document.getElementById("history-window-controls");
+    const workspaceSearchInput = document.getElementById("workspace-search-input");
+    const fleetLaneFilters = document.getElementById("fleet-lane-filters");
+    const fleetStaleToggle = document.getElementById("fleet-stale-toggle");
+    const addWorkspaceForm = document.getElementById("workspace-add-form");
+    const workspacePathInput = document.getElementById("workspace-path-input");
+    const commandPalette = document.getElementById("command-palette");
+    const commandPaletteInput = document.getElementById("command-palette-input");
+    const commandPaletteResults = document.getElementById("command-palette-results");
+    const commandPaletteStatus = document.getElementById("command-palette-status");
+    const commandPaletteOpenTrigger = document.getElementById("command-palette-open");
+    const commandPaletteCloseTrigger = document.getElementById("command-palette-close");
+    let activeStream = null;
+    let latestConsolePayload = null;
+    let inspectedWorkspacePath = null;
+    let inspectedWorkspaceData = null;
+    let inspectedWorkspaceDataPath = null;
+    let selectedComparisonSetName = null;
+    const comparisonPaths = new Set();
+    const comparisonState = new Map();
+    const fleetAuditState = new Map();
+    let historyWindow = "7d";
+    let workspaceQuery = "";
+    let fleetLaneFilter = "all";
+    let fleetStaleOnly = false;
+    let commandPaletteQuery = "";
+    let commandPaletteSelection = 0;
+    let commandPaletteItems = [];
+
+    const setScanStatus = (value) => {
+      if (scanStatus) scanStatus.textContent = value;
+    };
+
+    const appendScanEntry = (entry) => {
+      scanEntries.push(entry);
+      renderScanActivity(scanEntries);
+    };
+
+    const isTypingTarget = (target) =>
+      Boolean(
+        target &&
+          (target.tagName === "INPUT" ||
+            target.tagName === "TEXTAREA" ||
+            target.tagName === "SELECT" ||
+            target.isContentEditable)
+      );
+
+    const buildCommandPaletteItems = () => {
+      const workspaces = latestConsolePayload?.workspaces ?? [];
+      const activePath = latestConsolePayload?.repository?.path ?? null;
+      const activeWorkspace =
+        workspaces.find((workspace) => workspace.path === activePath) ?? workspaces[0] ?? null;
+      const comparisonActions = comparisonActionDescriptors(latestConsolePayload?.comparison_sets);
+      const items = globalConsoleActionDescriptors().map((action) => ({
+        category: action.category,
+        label: action.label,
+        detail: action.detail,
+        meta: action.meta,
+        run: () => runGlobalConsoleAction(action.id)
+      }));
+
+      if (activeWorkspace) {
+        items.push({
+          category: "History",
+          label: `Open history for ${activeWorkspace.name}`,
+          detail: activeWorkspace.path,
+          meta: "history",
+          run: () => {
+            window.location.href = historyHref(activeWorkspace.path);
+          }
+        });
+      }
+
+      for (const workspace of workspaces) {
+        items.push(...workspacePaletteItems(workspace, activePath));
+      }
+
+      for (const set of comparisonActions.savedSets) {
+        items.push(
+          {
+            category: "Comparison",
+            label: set.loadLabel,
+            detail: set.detail,
+            meta: "load",
+            run: () => runComparisonSetAction("load", { name: set.name })
+          },
+          {
+            category: "Comparison",
+            label: set.removeLabel,
+            detail: set.detail,
+            meta: "remove",
+            run: () => runComparisonSetAction("remove", { name: set.name })
+          }
+        );
+      }
+
+      return items;
+    };
+
+    const renderCommandPalette = () => {
+      if (!commandPaletteResults || !commandPaletteStatus) return;
+
+      const query = commandPaletteQuery.trim().toLowerCase();
+      const items = buildCommandPaletteItems().filter((item) => {
+        const haystack = [item.category, item.label, item.detail, item.meta].join(" ").toLowerCase();
+        return haystack.includes(query);
+      });
+
+      commandPaletteItems = items.slice(0, 18);
+      commandPaletteSelection = Math.min(
+        Math.max(commandPaletteSelection, 0),
+        Math.max(commandPaletteItems.length - 1, 0)
+      );
+      commandPaletteStatus.textContent =
+        commandPaletteItems.length > 0
+          ? `${commandPaletteItems.length} actions ready for the current repo set.`
+          : "No actions match the current query.";
+
+      if (commandPaletteItems.length === 0) {
+        commandPaletteResults.innerHTML = `
+          <div class="command-palette-empty">
+            No actions match that query. Try a repo name, path fragment, or an action like push, scan, refresh, or history.
+          </div>
+        `;
+        return;
+      }
+
+      commandPaletteResults.innerHTML = commandPaletteItems
+        .map(
+          (item, index) => `
+            <button
+              class="command-palette-item ${index === commandPaletteSelection ? "is-selected" : ""}"
+              type="button"
+              data-command-index="${index}"
+            >
+              <div class="command-palette-line">
+                <strong>${item.label}</strong>
+                <span class="command-palette-tag">${item.category}</span>
+              </div>
+              <span>${item.detail}</span>
+              <small>${item.meta}</small>
+            </button>
+          `
+        )
+        .join("");
+
+      for (const item of commandPaletteResults.querySelectorAll("[data-command-index]")) {
+        item.addEventListener("click", async () => {
+          const index = Number(item.getAttribute("data-command-index"));
+          const nextItem = commandPaletteItems[index];
+          if (!nextItem) return;
+          closeCommandPalette();
+          await nextItem.run();
+        });
+      }
+    };
+
+    const openCommandPalette = (prefill = "") => {
+      if (!commandPalette || !commandPaletteInput) return;
+      commandPalette.hidden = false;
+      commandPaletteQuery = prefill;
+      commandPaletteSelection = 0;
+      commandPaletteInput.value = prefill;
+      renderCommandPalette();
+      commandPaletteInput.focus();
+      commandPaletteInput.select();
+    };
+
+    const closeCommandPalette = () => {
+      if (!commandPalette || !commandPaletteInput) return;
+      commandPalette.hidden = true;
+      commandPaletteQuery = "";
+      commandPaletteSelection = 0;
+      commandPaletteItems = [];
+      commandPaletteInput.value = "";
+    };
+
+    const runSelectedCommandPaletteItem = async () => {
+      const item = commandPaletteItems[commandPaletteSelection];
+      if (!item) return;
+      closeCommandPalette();
+      await item.run();
+    };
+
+    const renderHistoryWindowControls = () => {
+      if (!historyWindowControls) return;
+      historyWindowControls.innerHTML = Object.keys(HISTORY_WINDOWS)
+        .map(
+          (windowKey) => `
+            <button
+              class="button secondary history-window ${historyWindow === windowKey ? "is-active" : ""}"
+              type="button"
+              data-history-window="${windowKey}"
+              style="min-height:34px;padding:0 12px;font-size:.8rem;${historyWindow === windowKey ? "border-color:rgba(120,3,255,.28);background:rgba(120,3,255,.08);" : ""}"
+            >
+              ${windowKey}
+            </button>
+          `
+        )
+        .join("");
+
+      for (const item of historyWindowControls.querySelectorAll(".history-window")) {
+        item.addEventListener("click", async () => {
+          const nextWindow = item.getAttribute("data-history-window");
+          if (!nextWindow || nextWindow === historyWindow) return;
+          historyWindow = nextWindow;
+          renderHistoryWindowControls();
+          if (latestConsolePayload) {
+            renderComparisonBoard(
+              latestConsolePayload.workspaces ?? [],
+              comparisonState,
+              latestConsolePayload.repository?.path ?? null
+            );
+            renderFleetBoard(
+              latestConsolePayload.workspaces ?? [],
+              latestConsolePayload.bridge
+            );
+          }
+          if (inspectedWorkspacePath) {
+            await inspectWorkspace(inspectedWorkspacePath, false);
+          }
+          if (latestConsolePayload?.audit) {
+            renderAudit(latestConsolePayload.audit);
+          }
+        });
+      }
+    };
+
+    const loadComparisonState = async (force = false) => {
+      if (!latestConsolePayload) return;
+      const workspaces = latestConsolePayload.workspaces ?? [];
+      const activePath = latestConsolePayload.repository?.path ?? null;
+      for (const workspace of workspaces) {
+        if (!comparisonPaths.has(workspace.path)) continue;
+        if (!force && comparisonState.has(workspace.path)) continue;
+        const data =
+          workspace.path === activePath
+            ? {
+                doctor: latestConsolePayload.doctor,
+                push_preview: latestConsolePayload.push_preview,
+                audit: latestConsolePayload.audit
+              }
+            : await loadRepositoryState(workspace.path, activePath);
+        comparisonState.set(workspace.path, data);
+      }
+
+      for (const path of [...comparisonState.keys()]) {
+        if (!comparisonPaths.has(path)) {
+          comparisonState.delete(path);
+        }
+      }
+
+      renderComparisonBoard(workspaces, comparisonState, activePath);
+    };
+
+    const loadFleetAuditState = async (force = false) => {
+      if (!latestConsolePayload) return;
+      const workspaces = latestConsolePayload.workspaces ?? [];
+      const activePath = latestConsolePayload.repository?.path ?? null;
+
+      for (const workspace of workspaces) {
+        if (!force && fleetAuditState.has(workspace.path)) continue;
+        const audit =
+          workspace.path === activePath
+            ? latestConsolePayload.audit
+            : await loadRepositoryAudit(workspace.path, activePath);
+        fleetAuditState.set(workspace.path, audit);
+      }
+
+      for (const path of [...fleetAuditState.keys()]) {
+        if (!workspaces.some((entry) => entry.path === path)) {
+          fleetAuditState.delete(path);
+        }
+      }
+
+      renderFleetBoard(workspaces, latestConsolePayload.bridge);
+    };
+
+    const clearSavedComparisonSelectionIfNeeded = async () => {
+      if (!selectedComparisonSetName) return;
+      selectedComparisonSetName = null;
+      await clearComparisonSetSelection();
+    };
+
+    const selectWorkspaceAction = async (path, options = {}) => {
+      const { announce = true, context = "generic" } = options;
+      if (announce) {
+        announceWorkspaceActionStatus("select", context, "working", path);
+      }
+      await fetch("/api/workspaces/select", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ path })
+      });
+      await refreshConsole();
+      if (announce) {
+        announceWorkspaceActionStatus("select", context, "success", path);
+      }
+    };
+
+    const inspectWorkspaceAction = async (path, options = {}) => {
+      const { announce = true, context = "generic" } = options;
+      if (announce) {
+        announceWorkspaceActionStatus("inspect", context, "working", path);
+      }
+      await inspectWorkspace(path, true);
+      if (announce) {
+        announceWorkspaceActionStatus("inspect", context, "success", path);
+      }
+    };
+
+    const refreshWorkspaceAction = async (path, options = {}) => {
+      const { announce = true, context = "generic" } = options;
+      if (announce) {
+        announceWorkspaceActionStatus("refresh", context, "working", path);
+      }
+      appendScanEntry({
+        title: "Workspace refresh",
+        meta: "running",
+        detail: path
+      });
+      const payload = await refreshWorkspace(path);
+      if (payload.error) {
+        appendScanEntry({
+          title: "Workspace refresh",
+          meta: "error",
+          detail: payload.error.message
+        });
+        setScanStatus("error");
+        if (announce) {
+          announceWorkspaceActionStatus("refresh", context, "error", path, payload.error.message);
+        }
+        return;
+      }
+      await refreshConsole();
+      if (path === inspectedWorkspacePath) {
+        await inspectWorkspace(path, true);
+      }
+      if (comparisonPaths.has(path)) {
+        await loadComparisonState(true);
+      }
+      if (announce) {
+        announceWorkspaceActionStatus("refresh", context, "success", path);
+      }
+    };
+
+    const toggleComparisonAction = async (path) => {
+      setActionStatus("working", "Updating comparison board", path);
+      await toggleComparison(path);
+      setActionStatus(
+        "success",
+        comparisonPaths.has(path) ? "Repo added to comparison" : "Repo removed from comparison",
+        path
+      );
+    };
+
+    const runVerificationAction = async (kind) => {
+      const isBrowser = kind === "browser";
+      const endpoint = isBrowser ? "/api/verify/browser" : "/api/verify/surface";
+      setActionStatus(
+        "working",
+        isBrowser ? "Running browser verification" : "Running smoke verification",
+        isBrowser
+          ? "The local bridge is invoking the browser-backed localhost verifier."
+          : "The local bridge is invoking the browser-console smoke verifier."
+      );
+
+      const response = await fetch(endpoint, {
+        method: "POST"
+      });
+      const payload = await response.json();
+
+      await refreshConsole();
+
+      if (payload.ok) {
+        setActionStatus(
+          "success",
+          isBrowser ? "Browser verification passed" : "Smoke verification passed",
+          payload.detail ?? "Verification completed."
+        );
+      } else {
+        setActionStatus(
+          "error",
+          isBrowser ? "Browser verification failed" : "Smoke verification failed",
+          payload.detail ?? "Verification did not complete successfully."
+        );
+      }
+    };
+
+    const runWorkspaceVerificationAction = async (path, kind, options = {}) => {
+      const { announce = true, context = "generic" } = options;
+      const isBrowser = kind === "browser";
+      const action = isBrowser ? "verify-browser" : "verify-surface";
+      const activePath = latestConsolePayload?.repository?.path ?? null;
+      const identifier = path === activePath ? "current" : encodeRepositoryId(path);
+      const endpoint = `/api/repositories/${identifier}/verify/${kind}`;
+      if (announce) {
+        announceWorkspaceActionStatus(action, context, "working", path);
+      }
+
+      const response = await fetch(endpoint, {
+        method: "POST"
+      });
+      const payload = await response.json();
+
+      await refreshConsole();
+      if (path === inspectedWorkspacePath) {
+        await inspectWorkspace(path, true);
+      }
+
+      if (payload.status === "unsupported") {
+        if (announce) {
+          announceWorkspaceActionStatus(
+            action,
+            context,
+            "unsupported",
+            path,
+            payload.detail ?? workspaceActionStatusSpec(action, context, "unsupported", path).detail
+          );
+        }
+        return;
+      }
+
+      if (payload.ok) {
+        if (announce) {
+          announceWorkspaceActionStatus(
+            action,
+            context,
+            "success",
+            path,
+            payload.detail ?? workspaceActionStatusSpec(action, context, "success", path).detail
+          );
+        }
+      } else {
+        if (announce) {
+          announceWorkspaceActionStatus(
+            action,
+            context,
+            "error",
+            path,
+            payload.detail ?? workspaceActionStatusSpec(action, context, "error", path).detail
+          );
+        }
+      }
+    };
+
+    const toggleComparison = async (path) => {
+      if (comparisonPaths.has(path)) {
+        if (comparisonPaths.size === 1) {
+          return;
+        }
+        await clearSavedComparisonSelectionIfNeeded();
+        comparisonPaths.delete(path);
+        comparisonState.delete(path);
+      } else {
+        await clearSavedComparisonSelectionIfNeeded();
+        comparisonPaths.add(path);
+      }
+      renderWorkspace(
+        latestConsolePayload?.workspaces ?? [],
+        latestConsolePayload?.repository ?? {},
+        latestConsolePayload?.push_preview
+      );
+      await loadComparisonState(true);
+    };
+
+    const inspectWorkspace = async (path, force = false) => {
+      if (!latestConsolePayload) return;
+      const workspaces = latestConsolePayload.workspaces ?? [];
+      const workspace = workspaces.find((entry) => entry.path === path);
+      if (!workspace) {
+        inspectedWorkspacePath = latestConsolePayload.repository?.path ?? null;
+        inspectedWorkspaceData = null;
+        inspectedWorkspaceDataPath = null;
+        renderWorkspaceDossier(null, null, latestConsolePayload.repository?.path);
+        return;
+      }
+
+      const previousData = inspectedWorkspaceData;
+      const previousDataPath = inspectedWorkspaceDataPath;
+      inspectedWorkspacePath = path;
+      if (!force && previousData && previousDataPath === path) {
+        renderWorkspaceDossier(workspace, previousData, latestConsolePayload.repository?.path);
+        return;
+      }
+
+      const dossierStatus = document.getElementById("workspace-dossier-status");
+      if (dossierStatus) {
+        dossierStatus.textContent = path === latestConsolePayload.repository?.path ? "active target" : "loading";
+      }
+
+      const data =
+        path === latestConsolePayload.repository?.path
+          ? {
+              doctor: latestConsolePayload.doctor,
+              push_preview: latestConsolePayload.push_preview,
+              audit: latestConsolePayload.audit
+            }
+          : await loadRepositoryState(path, latestConsolePayload.repository?.path);
+
+      inspectedWorkspaceData = data;
+      inspectedWorkspaceDataPath = path;
+      renderWorkspaceDossier(workspace, data, latestConsolePayload.repository?.path);
+    };
+
+    const startScanStream = () => {
+      if (activeStream) {
+        activeStream.close();
+      }
+
+      scanEntries.length = 0;
+      renderScanActivity(scanEntries);
+      setScanStatus("streaming");
+      announceScanLifecycleStatus("start");
+      appendEngineActivity("scan-start");
+
+      const stream = new EventSource("/api/scan/push/stream");
+      activeStream = stream;
+
+      stream.addEventListener("progress", (event) => {
+        const payload = JSON.parse(event.data);
+        switch (payload.kind) {
+          case "snapshot":
+            appendEngineActivity("scan-snapshot", payload);
+            break;
+          case "scanner-started":
+            appendEngineActivity("scan-scanner-started", payload);
+            break;
+          case "scanner-finished":
+            appendEngineActivity("scan-scanner-finished", payload);
+            break;
+          case "file-started":
+            appendEngineActivity("scan-file-started", payload);
+            break;
+          case "phase":
+            appendEngineActivity("scan-phase", payload);
+            break;
+        }
+      });
+
+      stream.addEventListener("done", (event) => {
+        const payload = JSON.parse(event.data);
+        appendEngineActivity("scan-done", payload);
+        setScanStatus(payload.status);
+        announceScanLifecycleStatus("done", payload);
+        stream.close();
+        activeStream = null;
+        loadCurrentRepositoryState()
+          .then((payload) => {
+            hydrateConsole(payload);
+          })
+          .catch(() => {});
+      });
+
+      stream.onerror = () => {
+        appendEngineActivity("scan-error");
+        setScanStatus("error");
+        announceScanLifecycleStatus("error");
+        stream.close();
+        activeStream = null;
+      };
+    };
+
+    const runProtectedPush = async () => {
+      const confirmed = window.confirm(
+        "Run the protected Wolfence push for the selected repository?"
+      );
+      if (!confirmed) return;
+
+      setScanStatus("pushing");
+      announceConsoleActionStatus("protected-push", "working");
+      appendEngineActivity("push-start");
+
+      const response = await fetch("/api/repositories/current/push", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ dry_run: false })
+      });
+      const payload = await response.json();
+      const outcome = payload.outcome ?? payload.status ?? "completed";
+      const detail =
+        payload.git_error ??
+        payload.error?.message ??
+        (payload.decision?.verdict
+          ? `Verdict: ${payload.decision.verdict}`
+          : "Protected push command completed.");
+
+      appendEngineActivity("push-done", { outcome, detail });
+      setScanStatus(outcome);
+      announceConsoleActionStatus(
+        "protected-push",
+        outcome === "success" || outcome === "push-completed" ? "success" : "error",
+        detail
+      );
+      if (latestConsolePayload?.repository?.path) {
+        fleetAuditState.delete(latestConsolePayload.repository.path);
+      }
+      await refreshConsole();
+    };
+
+    bindGlobalActionButton(scanTrigger, "scan");
+    bindGlobalActionButton(pushTrigger, "push", { errorAction: "protected-push" });
+    bindGlobalActionButton(verificationSurfaceTrigger, "verify-surface", {
+      busy: true,
+      errorAction: "verify-surface-global"
+    });
+    bindGlobalActionButton(verificationBrowserTrigger, "verify-browser", {
+      busy: true,
+      errorAction: "verify-browser-global"
+    });
+    bindGlobalActionButton(refreshAllTrigger, "refresh-all", {
+      busy: true,
+      errorAction: "refresh-all"
+    });
+
+    if (comparisonClearTrigger) {
+      comparisonClearTrigger.addEventListener("click", async () => {
+        if (!latestConsolePayload?.repository?.path) return;
+        await clearSavedComparisonSelectionIfNeeded();
+        comparisonPaths.clear();
+        comparisonPaths.add(latestConsolePayload.repository.path);
+        comparisonState.clear();
+        renderWorkspace(
+          latestConsolePayload?.workspaces ?? [],
+          latestConsolePayload?.repository ?? {},
+          latestConsolePayload?.push_preview
+        );
+        await loadComparisonState(true);
+      });
+    }
+
+    if (comparisonExportMarkdownTrigger) {
+      comparisonExportMarkdownTrigger.addEventListener("click", () => {
+        const workspaces = latestConsolePayload?.workspaces ?? [];
+        const activePath = latestConsolePayload?.repository?.path ?? null;
+        const payload = comparisonExportPayload(workspaces, activePath);
+        downloadArtifact(
+          `wolfence-comparison-${safeFileSegment(historyWindow)}.md`,
+          comparisonExportMarkdown(payload),
+          "text/markdown;charset=utf-8"
+        );
+        announceConsoleActionStatus("comparison-export", "success", `Downloaded Markdown for ${payload.compared_repositories.length} compared repos.`);
+      });
+    }
+
+    if (comparisonExportJsonTrigger) {
+      comparisonExportJsonTrigger.addEventListener("click", () => {
+        const workspaces = latestConsolePayload?.workspaces ?? [];
+        const activePath = latestConsolePayload?.repository?.path ?? null;
+        const payload = comparisonExportPayload(workspaces, activePath);
+        downloadArtifact(
+          `wolfence-comparison-${safeFileSegment(historyWindow)}.json`,
+          JSON.stringify(payload, null, 2),
+          "application/json;charset=utf-8"
+        );
+        announceConsoleActionStatus("comparison-export", "success", `Downloaded JSON for ${payload.compared_repositories.length} compared repos.`);
+      });
+    }
+
+    if (comparisonSaveCurrentTrigger) {
+      comparisonSaveCurrentTrigger.addEventListener("click", async () => {
+        setButtonBusy(comparisonSaveCurrentTrigger, true);
+        try {
+          await runGlobalConsoleAction("save-current-comparison");
+        } catch (error) {
+          announceConsoleActionStatus("comparison-save", "error", error?.message);
+        } finally {
+          setButtonBusy(comparisonSaveCurrentTrigger, false);
+        }
+      });
+    }
+
+    if (workspaceSearchInput) {
+      workspaceSearchInput.addEventListener("input", () => {
+        workspaceQuery = workspaceSearchInput.value.trim().toLowerCase();
+        if (!latestConsolePayload) return;
+        renderWorkspace(
+          latestConsolePayload.workspaces ?? [],
+          latestConsolePayload.repository ?? {},
+          latestConsolePayload.push_preview
+        );
+        renderComparisonSets(latestConsolePayload.comparison_sets);
+        renderFleetBoard(latestConsolePayload.workspaces ?? [], latestConsolePayload.bridge);
+      });
+    }
+
+    if (fleetLaneFilters) {
+      for (const item of fleetLaneFilters.querySelectorAll("[data-fleet-lane]")) {
+        item.addEventListener("click", () => {
+          const nextLane = item.getAttribute("data-fleet-lane");
+          if (!nextLane) return;
+          fleetLaneFilter = nextLane;
+          for (const peer of fleetLaneFilters.querySelectorAll("[data-fleet-lane]")) {
+            peer.classList.toggle(
+              "is-active-filter",
+              peer.getAttribute("data-fleet-lane") === fleetLaneFilter
+            );
+          }
+          if (latestConsolePayload) {
+            renderFleetBoard(latestConsolePayload.workspaces ?? [], latestConsolePayload.bridge);
+          }
+        });
+      }
+    }
+
+    if (fleetStaleToggle) {
+      fleetStaleToggle.addEventListener("click", () => {
+        fleetStaleOnly = !fleetStaleOnly;
+        fleetStaleToggle.classList.toggle("is-active-filter", fleetStaleOnly);
+        fleetStaleToggle.textContent = fleetStaleOnly ? "Showing stale only" : "Show stale only";
+        if (latestConsolePayload) {
+          renderFleetBoard(latestConsolePayload.workspaces ?? [], latestConsolePayload.bridge);
+        }
+      });
+    }
+
+    if (addWorkspaceForm) {
+      addWorkspaceForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const path = workspacePathInput?.value?.trim();
+        if (!path) return;
+        const submitButton = addWorkspaceForm.querySelector('button[type="submit"]');
+        setButtonBusy(submitButton, true);
+        announceConsoleActionStatus("workspace-pin", "working", path);
+        try {
+          await fetch("/api/workspaces", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ path })
+          });
+          if (workspacePathInput) {
+            workspacePathInput.value = "";
+          }
+          await refreshConsole();
+          announceConsoleActionStatus("workspace-pin", "success", path);
+        } catch (error) {
+          announceConsoleActionStatus("workspace-pin", "error", error?.message);
+        } finally {
+          setButtonBusy(submitButton, false);
+        }
+      });
+    }
+
+    if (commandPaletteOpenTrigger) {
+      commandPaletteOpenTrigger.addEventListener("click", () => {
+        openCommandPalette();
+      });
+    }
+
+    if (commandPaletteCloseTrigger) {
+      commandPaletteCloseTrigger.addEventListener("click", () => {
+        closeCommandPalette();
+      });
+    }
+
+    if (commandPalette) {
+      commandPalette.addEventListener("click", (event) => {
+        if (event.target === commandPalette) {
+          closeCommandPalette();
+        }
+      });
+    }
+
+    if (commandPaletteInput) {
+      commandPaletteInput.addEventListener("input", () => {
+        commandPaletteQuery = commandPaletteInput.value;
+        commandPaletteSelection = 0;
+        renderCommandPalette();
+      });
+
+      commandPaletteInput.addEventListener("keydown", async (event) => {
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          commandPaletteSelection = Math.min(
+            commandPaletteSelection + 1,
+            Math.max(commandPaletteItems.length - 1, 0)
+          );
+          renderCommandPalette();
+        } else if (event.key === "ArrowUp") {
+          event.preventDefault();
+          commandPaletteSelection = Math.max(commandPaletteSelection - 1, 0);
+          renderCommandPalette();
+        } else if (event.key === "Enter") {
+          event.preventDefault();
+          await runSelectedCommandPaletteItem();
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          closeCommandPalette();
+        }
+      });
+    }
+
+    window.addEventListener("keydown", (event) => {
+      const paletteVisible = commandPalette && !commandPalette.hidden;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        if (paletteVisible) {
+          closeCommandPalette();
+        } else {
+          openCommandPalette();
+        }
+        return;
+      }
+
+      if (paletteVisible && event.key === "Escape") {
+        event.preventDefault();
+        closeCommandPalette();
+        return;
+      }
+
+      if (!paletteVisible && event.key === "/" && !isTypingTarget(event.target)) {
+        event.preventDefault();
+        openCommandPalette();
+      }
+    });
+
+    const hydrateConsole = (payload) => {
+      latestConsolePayload = payload;
+      renderHistoryWindowControls();
+      renderCommandPalette();
+      const repo = {
+        ...payload.repository,
+        branch: payload.repository?.branch ?? payload.push_preview?.branch,
+        upstream: payload.repository?.upstream ?? payload.push_preview?.upstream
+      };
+
+      updateHero(repo, payload.push_preview);
+      renderWorkspace(payload.workspaces ?? [], repo, payload.push_preview);
+      renderComparisonSets(payload.comparison_sets);
+      renderSummary(payload.doctor, payload.push_preview, payload.audit);
+      renderFindings(payload.push_preview);
+      renderDoctor(payload.doctor);
+      renderPolicy(payload.config, payload.receipt_policy);
+      renderBridge(payload.bridge);
+      renderAudit(payload.audit);
+      renderFleetBoard(payload.workspaces ?? [], payload.bridge);
+
+      const workspaces = payload.workspaces ?? [];
+      const activePath = payload.repository?.path ?? null;
+      const savedComparisonSets = payload.comparison_sets?.sets ?? [];
+      selectedComparisonSetName = payload.comparison_sets?.selected_name ?? null;
+      const selectedSet = savedComparisonSets.find(
+        (entry) => entry.name === selectedComparisonSetName
+      );
+
+      if (selectedSet) {
+        comparisonPaths.clear();
+        for (const path of selectedSet.paths ?? []) {
+          comparisonPaths.add(path);
+        }
+      } else if (comparisonPaths.size === 0 && activePath) {
+        comparisonPaths.add(activePath);
+      }
+
+      if (activePath && !comparisonPaths.has(activePath)) {
+        comparisonPaths.add(activePath);
+      }
+      for (const path of [...comparisonPaths]) {
+        if (!workspaces.some((entry) => entry.path === path)) {
+          comparisonPaths.delete(path);
+          comparisonState.delete(path);
+        }
+      }
+      if (!inspectedWorkspacePath || !workspaces.some((entry) => entry.path === inspectedWorkspacePath)) {
+        inspectedWorkspacePath = activePath;
+        inspectedWorkspaceData = null;
+        inspectedWorkspaceDataPath = null;
+      }
+      loadComparisonState(inspectedWorkspacePath === activePath).catch(() => {
+        renderComparisonBoard(workspaces, comparisonState, activePath);
+      });
+      loadFleetAuditState(false).catch(() => {
+        renderFleetBoard(workspaces, payload.bridge);
+      });
+      inspectWorkspace(inspectedWorkspacePath, inspectedWorkspacePath === activePath).catch(() => {
+        renderWorkspaceDossier(null, null, activePath);
+      });
+    };
+
+    const refreshConsole = () =>
+      loadCurrentRepositoryState()
+        .then((payload) => {
+          hydrateConsole(payload);
+        });
+
+    refreshConsole().catch(() => {});
+  </script>
+</ConsoleLayout>

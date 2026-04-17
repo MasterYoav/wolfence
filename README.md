@@ -4,12 +4,17 @@
 Wolfence is a **security-first Git interface** that prevents unsafe code
 from ever leaving a developer's machine.
 
-The repository now contains two product surfaces:
+The repository now contains three product surfaces:
 
 - the authoritative `wolf` Rust CLI that enforces security decisions and wraps
   protected Git operations
 - a native SwiftUI macOS app at the repo root that monitors multiple
   repositories, renders Wolfence evidence, and refreshes structured repo state
+
+The repository now also includes an Astro-based web console for a
+cross-platform browser UI at:
+
+- `apps/web-console`
 
 [![Rust](https://img.shields.io/badge/Rust-%23000000.svg?e&logo=rust&logoColor=white)](#)
 [![Swift](https://img.shields.io/badge/Swift-F54A2A?logo=swift&logoColor=white)](#)
@@ -26,7 +31,7 @@ misconfigurations often slip into repositories unnoticed.
 
 > Wolfence stands between your code and the world --- and decides if
 > it's safe to pass.
-> It does not try to replace your whole Git workflow..
+> It does not try to replace your whole Git workflow.
 
 You write code normally.\
 You commit normally.\
@@ -109,6 +114,10 @@ Operator console:
 
 `macOS app → .wolfence files + wolf --json surfaces → native workspace UI`
 
+Cross-platform browser console:
+
+`Astro app → local bridge → .wolfence files + wolf --json surfaces → browser UI`
+
 ------------------------------------------------------------------------
 
 ## Implementation Direction
@@ -128,6 +137,9 @@ Why:
 The Rust binary remains authoritative for every security judgment. The macOS
 app is an operator console that reads repo-local evidence and machine-readable
 Wolfence output instead of reimplementing policy.
+
+The Astro web console follows the same rule. It is a browser presentation
+surface, not a second policy engine.
 
 Core docs:
 
@@ -149,6 +161,7 @@ Core docs:
 - `docs/development/json-output.md`
 - `docs/development/prototype-demo.md`
 - `docs/ui/macos-console.md`
+- `docs/ui/web-console.md`
 - `docs/ui/swiftui-xcode-handoff.md`
 - `docs/repo-map.md`
 
@@ -159,6 +172,10 @@ Core docs:
 wolf init\
 wolf push\
 wolf push --json\
+wolf ui\
+wolf ui serve\
+wolf ui verify\
+wolf ui verify-browser\
 wolf scan\
 wolf scan --json\
 wolf scan push\
@@ -211,6 +228,32 @@ For UI work and automation, prefer the documented machine-readable surfaces in:
 For native app work, the root-level Xcode project is:
 
 `Wolfence.xcodeproj`
+
+For the cross-platform browser console, see:
+
+`apps/web-console`
+
+To run the local browser bridge:
+
+```bash
+wolf ui
+```
+
+To verify the browser console bundle and bridge metadata:
+
+```bash
+wolf ui verify
+```
+
+To run the browser-driven end-to-end console check:
+
+```bash
+wolf ui verify-browser
+```
+
+Those verification commands now persist their latest result in repo-local UI
+state, and `wolf doctor` surfaces the latest browser-backed verification
+posture alongside the existing browser-console surface check.
 
 ------------------------------------------------------------------------
 

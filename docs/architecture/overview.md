@@ -32,11 +32,13 @@ command output, but it does not own enforcement.
 
 ## Product Surfaces
 
-Wolfence currently ships with two local-first surfaces:
+Wolfence currently ships with three local-first surfaces:
 
 - `wolf`: the authoritative CLI and protected Git execution path
 - `Wolfence.app`: a root-level SwiftUI operator console for multi-repository
   monitoring
+- `apps/web-console`: a cross-platform browser console served through the
+  localhost `wolf ui` bridge
 
 This separation matters:
 
@@ -63,6 +65,12 @@ macOS app
   -> repo-local state adapters (.wolfence/*)
   -> wolf JSON command adapters
   -> native presentation layer
+
+browser console
+  -> local bridge
+  -> repo-local state adapters (.wolfence/*)
+  -> wolf JSON command adapters
+  -> Astro presentation layer
 ```
 
 ## Core Modules
@@ -97,6 +105,13 @@ Its non-responsibilities are equally important:
 - no independent security verdict logic
 - no alternate policy rules
 - no bypass around the Rust protected path
+
+### Browser console
+
+The Astro web console follows the same trust rule as the macOS app. It is a
+presentation layer only. Browsers cannot safely replace the local enforcement
+engine, so the browser surface must remain downstream of a local bridge that
+exposes structured Wolfence state on localhost.
 
 ### Git integration layer
 
