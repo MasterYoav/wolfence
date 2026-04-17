@@ -421,6 +421,11 @@ Current examples include:
   the same push
 - scanner-bundle changes that do not also update declared local rule provenance
   surfaces such as `scanner-inventory.*` or the detection model
+- explicit repo-root protected-push evaluation for browser-console and
+  multi-workspace flows, so local bridge actions are bound to the selected
+  repository instead of ambient process `cwd`
+- Git-root discovery from arbitrary start paths, so repo selection and
+  explicit-repo self-protection checks resolve against the intended repository
 - `.wolfence/config.toml` changes in general as review-significant policy edits
 - `.wolfence/config.toml` changes that lower enforcement to `advisory`
 - `.wolfence/config.toml` scan exclusions that target source, CI, dependency, or

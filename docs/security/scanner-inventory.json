@@ -220,6 +220,8 @@
         "additional unmanaged executable hook detection",
         "managed-hook launcher drift detection",
         "native pre-push transport validation against the evaluated current-branch snapshot",
+        "explicit repo-root protected-push evaluation for browser-console and multi-workspace flows",
+        "Git-root discovery from arbitrary start paths for explicit-repo checks",
         "push-snapshot revalidation elsewhere in the product"
       ],
       "known_gaps": [
