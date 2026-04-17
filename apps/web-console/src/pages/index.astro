@@ -3273,18 +3273,10 @@ const activeRepo = workspaceRepos[0];
       });
     }
 
-    if (comparisonSaveCurrentTrigger) {
-      comparisonSaveCurrentTrigger.addEventListener("click", async () => {
-        setButtonBusy(comparisonSaveCurrentTrigger, true);
-        try {
-          await runGlobalConsoleAction("save-current-comparison");
-        } catch (error) {
-          announceConsoleActionStatus("comparison-save", "error", error?.message);
-        } finally {
-          setButtonBusy(comparisonSaveCurrentTrigger, false);
-        }
-      });
-    }
+    bindGlobalActionButton(comparisonSaveCurrentTrigger, "save-current-comparison", {
+      busy: true,
+      errorAction: "comparison-save"
+    });
 
     if (workspaceSearchInput) {
       workspaceSearchInput.addEventListener("input", () => {
